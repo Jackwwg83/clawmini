@@ -2,6 +2,7 @@ import {
   ArrowRightOutlined,
   DatabaseOutlined,
   DesktopOutlined,
+  MessageOutlined,
   PlusOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
@@ -58,6 +59,9 @@ export function DashboardPage() {
         title="设备列表"
         extra={
           <Space>
+            <Button icon={<MessageOutlined />} onClick={() => navigate('/im-config')}>
+              IM 配置
+            </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/onboarding')}>
               接入设备
             </Button>
@@ -94,13 +98,18 @@ export function DashboardPage() {
                     </Space>
                   }
                   extra={
-                    <Button
-                      type="link"
-                      icon={<ArrowRightOutlined />}
-                      onClick={() => navigate(`/devices/${device.id}`)}
-                    >
-                      查看详情
-                    </Button>
+                    <Space>
+                      <Button type="link" icon={<MessageOutlined />} onClick={() => navigate(`/devices/${device.id}/im-config`)}>
+                        IM 配置
+                      </Button>
+                      <Button
+                        type="link"
+                        icon={<ArrowRightOutlined />}
+                        onClick={() => navigate(`/devices/${device.id}`)}
+                      >
+                        查看详情
+                      </Button>
+                    </Space>
                   }
                 >
                   <Space direction="vertical" size={10} style={{ width: '100%' }}>

@@ -48,9 +48,13 @@ func TestValidateCommand_AllowsPositionalValuesAfterValidatedVerb(t *testing.T) 
 func TestValidateCommand_IMWizardCommands(t *testing.T) {
 	valid := [][]string{
 		{"plugins", "install", "clawdbot-dingtalk"},
-		{"plugins", "install", "@openclaw/feishu"},
+		{"plugins", "install", "@anthropic-ai/feishu"},
+		{"plugins", "install", "@anthropic-ai/lark"},
 		{"config", "set", "plugins.entries.clawdbot-dingtalk.clientSecret", "abc$def\\ghi"},
-		{"config", "set", "plugins.entries.@openclaw/feishu.appSecret", "sec$ret\\with\\slashes"},
+		{"config", "set", "plugins.entries.@anthropic-ai/feishu.appSecret", "sec$ret\\with\\slashes"},
+		{"config", "set", "plugins.entries.@anthropic-ai/lark.appSecret", "sec$ret\\with\\slashes"},
+		{"channels", "status"},
+		{"gateway", "restart"},
 	}
 
 	for _, args := range valid {

@@ -2,6 +2,7 @@ import {
   DesktopOutlined,
   DisconnectOutlined,
   LogoutOutlined,
+  MessageOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
 import { Avatar, Badge, Button, Layout, Menu, Space, Typography } from 'antd'
@@ -19,6 +20,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { wsConnected } = useRealtime()
 
   const selectedMenu = useMemo(() => {
+    if (location.pathname.startsWith('/im-config') || location.pathname.includes('/im-config')) {
+      return ['im-config']
+    }
     if (location.pathname.startsWith('/devices/')) {
       return ['dashboard']
     }
@@ -50,6 +54,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
               key: 'dashboard',
               icon: <DesktopOutlined />,
               label: <Link to="/dashboard">设备总览</Link>,
+            },
+            {
+              key: 'im-config',
+              icon: <MessageOutlined />,
+              label: <Link to="/im-config">IM 配置</Link>,
             },
           ]}
         />

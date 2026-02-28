@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
@@ -10,12 +9,10 @@ import {
   Alert,
   Button,
   Card,
-  Col,
   Empty,
   Form,
   Input,
   Result,
-  Row,
   Space,
   Spin,
   Steps,
@@ -25,7 +22,14 @@ import {
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { execDeviceCommand, fetchCommandById, fetchDeviceById } from '../api/client'
+import {
+  type ConfigureIMStep,
+  execDeviceCommand,
+  fetchCommandById,
+  fetchConfigureIMJob,
+  fetchDeviceById,
+  startConfigureIM,
+} from '../api/client'
 import { DeviceOnlineTag } from '../components/DeviceOnlineTag'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtime } from '../contexts/RealtimeContext'
@@ -33,12 +37,12 @@ import type { CommandRecord, DeviceSnapshot } from '../types'
 import { formatDateTime } from '../utils/format'
 
 const COMMAND_POLL_INTERVAL_MS = 2000
-const VERIFY_WAIT_MS = 10000
+const CONFIGURE_JOB_POLL_INTERVAL_MS = 1500
+const VERIFY_POLL_INTERVAL_MS = 5000
+const VERIFY_TIMEOUT_MS = 60000
 const TERMINAL_STATUS = new Set(['completed', 'failed'])
 
 type IMPlatform = 'dingtalk' | 'feishu'
-type ConfigureStepStatus = 'pending' | 'running' | 'success' | 'failed'
-
 type VerifyState = 'idle' | 'running' | 'success' | 'failed'
 
 interface CredentialsFormValue {
@@ -46,26 +50,13 @@ interface CredentialsFormValue {
   secret: string
 }
 
-interface CommandPlanItem {
-  key: string
-  title: string
-  args: string[]
-  timeout: number
-  displayCommand: string
-}
-
-interface ConfigureTimelineItem extends CommandPlanItem {
-  status: ConfigureStepStatus
-  error?: string
-}
-
 interface PlatformMeta {
   name: string
-  desc: string
-  createHint: string
   link: string
   idLabel: string
   secretLabel: string
+  instructionItems: string[]
+  callbackPlaceholder: string
 }
 
 interface VerifyResult {
@@ -78,19 +69,27 @@ interface VerifyResult {
 const PLATFORM_META: Record<IMPlatform, PlatformMeta> = {
   dingtalk: {
     name: '钉钉',
-    desc: '适用于钉钉企业内部应用的消息接入。',
-    createHint: '登录钉钉开放平台 → 创建企业内部应用 → 获取 ClientID 和 ClientSecret',
     link: 'https://open.dingtalk.com',
     idLabel: 'ClientID',
     secretLabel: 'ClientSecret',
+    instructionItems: [
+      '登录钉钉开放平台并创建企业内部应用。',
+      '在应用凭证页面获取 ClientID 和 ClientSecret。',
+      '在事件订阅/回调设置中配置回调地址并保存。',
+    ],
+    callbackPlaceholder: 'https://<你的网关域名>/callbacks/dingtalk',
   },
   feishu: {
     name: '飞书',
-    desc: '适用于飞书企业自建应用的消息接入。',
-    createHint: '登录飞书开放平台 → 创建企业自建应用 → 获取 App ID 和 App Secret',
     link: 'https://open.feishu.cn',
     idLabel: 'AppID',
     secretLabel: 'AppSecret',
+    instructionItems: [
+      '登录飞书开放平台并创建企业自建应用。',
+      '在凭证与基础信息页面获取 App ID 和 App Secret。',
+      '在事件订阅中配置回调地址并启用对应事件。',
+    ],
+    callbackPlaceholder: 'https://<你的网关域名>/callbacks/feishu',
   },
 }
 
@@ -137,8 +136,8 @@ function isSuccessStatusText(value?: string): boolean {
 
 function isFailedStatusText(value?: string): boolean {
   const normalized = toLowerText(value)
-  return ['error', 'fail', 'failed', 'offline', 'disconnected', 'inactive', 'timeout', 'unhealthy'].some(
-    (keyword) => normalized.includes(keyword),
+  return ['error', 'fail', 'failed', 'offline', 'disconnected', 'inactive', 'timeout', 'unhealthy'].some((keyword) =>
+    normalized.includes(keyword),
   )
 }
 
@@ -146,7 +145,7 @@ function platformKeywords(platform: IMPlatform): string[] {
   if (platform === 'dingtalk') {
     return ['dingtalk', '钉钉', 'clawdbot-dingtalk']
   }
-  return ['feishu', 'lark', '飞书', '@openclaw/feishu']
+  return ['feishu', 'lark', '飞书', '@anthropic-ai/feishu', '@anthropic-ai/lark']
 }
 
 function toObject(value: unknown): Record<string, unknown> | null {
@@ -281,80 +280,7 @@ function analyzeChannelStatus(platform: IMPlatform, stdout: string, stderr: stri
   }
 }
 
-function buildCommandPlan(platform: IMPlatform, credential: CredentialsFormValue): CommandPlanItem[] {
-  if (platform === 'dingtalk') {
-    return [
-      {
-        key: 'install-plugin',
-        title: '安装插件',
-        args: ['plugins', 'install', 'clawdbot-dingtalk'],
-        timeout: 120,
-        displayCommand: 'openclaw plugins install clawdbot-dingtalk',
-      },
-      {
-        key: 'set-client-id',
-        title: '配置 ClientID',
-        args: ['config', 'set', 'plugins.entries.clawdbot-dingtalk.clientId', credential.id],
-        timeout: 15,
-        displayCommand: 'openclaw config set plugins.entries.clawdbot-dingtalk.clientId <已填写>',
-      },
-      {
-        key: 'set-client-secret',
-        title: '配置 ClientSecret',
-        args: ['config', 'set', 'plugins.entries.clawdbot-dingtalk.clientSecret', credential.secret],
-        timeout: 15,
-        displayCommand: 'openclaw config set plugins.entries.clawdbot-dingtalk.clientSecret ******',
-      },
-      {
-        key: 'enable-ai-card',
-        title: '启用 AI Card',
-        args: ['config', 'set', 'plugins.entries.clawdbot-dingtalk.aiCard.enabled', 'true'],
-        timeout: 15,
-        displayCommand: 'openclaw config set plugins.entries.clawdbot-dingtalk.aiCard.enabled true',
-      },
-      {
-        key: 'restart-gateway',
-        title: '重启 Gateway',
-        args: ['gateway', 'restart'],
-        timeout: 30,
-        displayCommand: 'openclaw gateway restart',
-      },
-    ]
-  }
-
-  return [
-    {
-      key: 'install-plugin',
-      title: '安装插件',
-      args: ['plugins', 'install', '@openclaw/feishu'],
-      timeout: 120,
-      displayCommand: 'openclaw plugins install @openclaw/feishu',
-    },
-    {
-      key: 'set-app-id',
-      title: '配置 AppID',
-      args: ['config', 'set', 'plugins.entries.@openclaw/feishu.appId', credential.id],
-      timeout: 15,
-      displayCommand: 'openclaw config set plugins.entries.@openclaw/feishu.appId <已填写>',
-    },
-    {
-      key: 'set-app-secret',
-      title: '配置 AppSecret',
-      args: ['config', 'set', 'plugins.entries.@openclaw/feishu.appSecret', credential.secret],
-      timeout: 15,
-      displayCommand: 'openclaw config set plugins.entries.@openclaw/feishu.appSecret ******',
-    },
-    {
-      key: 'restart-gateway',
-      title: '重启 Gateway',
-      args: ['gateway', 'restart'],
-      timeout: 30,
-      displayCommand: 'openclaw gateway restart',
-    },
-  ]
-}
-
-function configureItemStatus(step: ConfigureTimelineItem): {
+function configureItemStatus(step: ConfigureIMStep): {
   color: string
   dot: ReactNode
 } {
@@ -379,6 +305,13 @@ function configureItemStatus(step: ConfigureTimelineItem): {
     }
   }
 
+  if (step.status === 'skipped') {
+    return {
+      color: 'gray',
+      dot: <ClockCircleOutlined style={{ color: '#9ca3af' }} />,
+    }
+  }
+
   return {
     color: 'gray',
     dot: <ClockCircleOutlined style={{ color: '#9ca3af' }} />,
@@ -386,7 +319,7 @@ function configureItemStatus(step: ConfigureTimelineItem): {
 }
 
 export function IMConfigPage() {
-  const { id = '' } = useParams()
+  const { id = '', platform: platformParam = '' } = useParams()
   const navigate = useNavigate()
   const { token } = useAuth()
   const { getDeviceById, commandRecords } = useRealtime()
@@ -396,12 +329,11 @@ export function IMConfigPage() {
   const [fallbackDevice, setFallbackDevice] = useState<DeviceSnapshot | null>(null)
 
   const [currentStep, setCurrentStep] = useState(0)
-  const [platform, setPlatform] = useState<IMPlatform | null>(null)
   const [credentials, setCredentials] = useState<CredentialsFormValue | null>(null)
 
   const [configureState, setConfigureState] = useState<'idle' | 'running' | 'success' | 'failed'>('idle')
   const [configureError, setConfigureError] = useState('')
-  const [configureSteps, setConfigureSteps] = useState<ConfigureTimelineItem[]>([])
+  const [configureSteps, setConfigureSteps] = useState<ConfigureIMStep[]>([])
 
   const [verifyState, setVerifyState] = useState<VerifyState>('idle')
   const [verifyMessage, setVerifyMessage] = useState('')
@@ -411,6 +343,13 @@ export function IMConfigPage() {
   const storeDevice = getDeviceById(id)
   const commandRecordsRef = useRef(commandRecords)
   const cancelledRef = useRef(false)
+
+  const platform = useMemo<IMPlatform | null>(() => {
+    if (platformParam === 'dingtalk' || platformParam === 'feishu') {
+      return platformParam
+    }
+    return null
+  }, [platformParam])
 
   useEffect(() => {
     commandRecordsRef.current = commandRecords
@@ -425,7 +364,7 @@ export function IMConfigPage() {
     return () => {
       cancelledRef.current = true
     }
-  }, [id])
+  }, [id, platformParam])
 
   useEffect(() => {
     if (!token || !id) {
@@ -518,118 +457,71 @@ export function IMConfigPage() {
     [id, token],
   )
 
-  const resetExecutionState = () => {
-    setConfigureState('idle')
-    setConfigureError('')
-    setConfigureSteps([])
-    setVerifyState('idle')
-    setVerifyMessage('')
-    setVerifyChannelName('')
-    setVerifyRecord(null)
-  }
-
-  const handleSelectPlatform = (nextPlatform: IMPlatform) => {
-    setPlatform(nextPlatform)
-    setCredentials(null)
-    form.resetFields()
-    resetExecutionState()
-    setCurrentStep(1)
-  }
-
   const runConfigureFlow = useCallback(
     async (nextCredential: CredentialsFormValue) => {
-      if (!platform) {
-        message.error('请先选择平台')
-        return
-      }
-      if (cancelledRef.current) {
+      if (!platform || !token || !id) {
+        message.error('缺少平台、登录状态或设备 ID')
         return
       }
 
-      const plan = buildCommandPlan(platform, nextCredential)
       setConfigureState('running')
       setConfigureError('')
       setVerifyState('idle')
       setVerifyMessage('')
       setVerifyChannelName('')
       setVerifyRecord(null)
-      setConfigureSteps(
-        plan.map((item) => ({
-          ...item,
-          status: 'pending',
-        })),
-      )
 
-      for (let index = 0; index < plan.length; index += 1) {
+      try {
+        const createdJob = await startConfigureIM(token, id, {
+          platform,
+          credentials: {
+            id: nextCredential.id,
+            secret: nextCredential.secret,
+          },
+        })
+
         if (cancelledRef.current) {
           return
         }
-        const item = plan[index]
-        setConfigureSteps((prev) =>
-          prev.map((step, stepIndex) => {
-            if (stepIndex === index) {
-              return { ...step, status: 'running', error: undefined }
-            }
-            return step
-          }),
-        )
 
-        try {
-          const record = await runCommand(item.args, item.timeout)
-          if (cancelledRef.current) {
+        setConfigureSteps(createdJob.steps)
+
+        let latest = createdJob
+        while (!cancelledRef.current) {
+          if (latest.status === 'success') {
+            setConfigureState('success')
+            setConfigureError('')
+            setCurrentStep(3)
+            message.success('自动配置完成，开始验证连接')
             return
           }
 
-          if (isCommandFailed(record)) {
-            const errorText = record.stderr || `${item.title} 失败`
-            setConfigureSteps((prev) =>
-              prev.map((step, stepIndex) => {
-                if (stepIndex === index) {
-                  return { ...step, status: 'failed', error: errorText }
-                }
-                return step
-              }),
-            )
+          if (latest.status === 'failed') {
+            const failedStep = latest.steps.find((step) => step.status === 'failed')
+            const errorText = latest.error || failedStep?.error || '自动配置失败'
             setConfigureState('failed')
             setConfigureError(errorText)
             return
           }
 
-          setConfigureSteps((prev) =>
-            prev.map((step, stepIndex) => {
-              if (stepIndex === index) {
-                return { ...step, status: 'success', error: undefined }
-              }
-              return step
-            }),
-          )
-        } catch (err) {
+          await waitFor(CONFIGURE_JOB_POLL_INTERVAL_MS)
           if (cancelledRef.current) {
             return
           }
-          const errorText = getErrorMessage(err, `${item.title} 执行失败`)
-          setConfigureSteps((prev) =>
-            prev.map((step, stepIndex) => {
-              if (stepIndex === index) {
-                return { ...step, status: 'failed', error: errorText }
-              }
-              return step
-            }),
-          )
-          setConfigureState('failed')
-          setConfigureError(errorText)
+
+          latest = await fetchConfigureIMJob(token, id, createdJob.id)
+          setConfigureSteps(latest.steps)
+        }
+      } catch (err) {
+        if (cancelledRef.current) {
           return
         }
+        const errorText = getErrorMessage(err, '自动配置失败')
+        setConfigureState('failed')
+        setConfigureError(errorText)
       }
-
-      if (cancelledRef.current) {
-        return
-      }
-      setConfigureState('success')
-      setCurrentStep(4)
-      message.success('自动配置完成，开始验证连接')
     },
-    [platform, runCommand],
+    [id, platform, token],
   )
 
   const handleSubmitCredential = async () => {
@@ -637,7 +529,7 @@ export function IMConfigPage() {
       const values = await form.validateFields()
       cancelledRef.current = false
       setCredentials(values)
-      setCurrentStep(3)
+      setCurrentStep(2)
       void runConfigureFlow(values)
     } catch {
       // 表单错误由 Form 自身展示。
@@ -645,7 +537,7 @@ export function IMConfigPage() {
   }
 
   useEffect(() => {
-    if (currentStep !== 4 || configureState !== 'success' || verifyState !== 'idle' || !platform) {
+    if (currentStep !== 3 || configureState !== 'success' || verifyState !== 'idle' || !platform) {
       return
     }
 
@@ -653,39 +545,56 @@ export function IMConfigPage() {
 
     const runVerify = async () => {
       setVerifyState('running')
-      setVerifyMessage('等待网关重启后验证连接状态...')
+      setVerifyChannelName('')
+      setVerifyRecord(null)
+      setVerifyMessage('开始轮询通道状态...')
 
-      try {
-        await waitFor(VERIFY_WAIT_MS)
+      let lastFailure = ''
+      const startedAt = Date.now()
+      let attempt = 0
 
-        if (cancelled) {
-          return
+      while (!cancelled && Date.now() - startedAt <= VERIFY_TIMEOUT_MS) {
+        attempt += 1
+        setVerifyMessage(`第 ${attempt} 次检查通道状态...`)
+
+        try {
+          const record = await runCommand(['channels', 'status'], 15)
+          if (cancelled) {
+            return
+          }
+
+          setVerifyRecord(record)
+
+          if (!isCommandFailed(record)) {
+            const analyzed = analyzeChannelStatus(platform, record.stdout || '', record.stderr || '')
+            if (analyzed.ok) {
+              setVerifyState('success')
+              setVerifyMessage(analyzed.message)
+              setVerifyChannelName(analyzed.channelName || PLATFORM_META[platform].name)
+              return
+            }
+
+            lastFailure = analyzed.detail ? `${analyzed.message}\n${analyzed.detail}` : analyzed.message
+          } else {
+            lastFailure = record.stderr || '获取通道状态失败'
+          }
+        } catch (err) {
+          lastFailure = getErrorMessage(err, '验证连接失败')
         }
 
-        const record = await runCommand(['channels', 'status'], 15)
-        if (cancelled) {
-          return
+        if (Date.now() - startedAt >= VERIFY_TIMEOUT_MS) {
+          break
         }
 
-        setVerifyRecord(record)
-
-        if (isCommandFailed(record)) {
-          setVerifyState('failed')
-          setVerifyMessage(record.stderr || '获取通道状态失败')
-          return
-        }
-
-        const analyzed = analyzeChannelStatus(platform, record.stdout || '', record.stderr || '')
-        setVerifyState(analyzed.ok ? 'success' : 'failed')
-        setVerifyMessage(analyzed.detail ? `${analyzed.message}\n${analyzed.detail}` : analyzed.message)
-        setVerifyChannelName(analyzed.channelName || PLATFORM_META[platform].name)
-      } catch (err) {
-        if (cancelled) {
-          return
-        }
-        setVerifyState('failed')
-        setVerifyMessage(getErrorMessage(err, '验证连接失败'))
+        await waitFor(VERIFY_POLL_INTERVAL_MS)
       }
+
+      if (cancelled) {
+        return
+      }
+
+      setVerifyState('failed')
+      setVerifyMessage(lastFailure || '在 60 秒内未检测到通道连接，请重试。')
     }
 
     void runVerify()
@@ -696,18 +605,17 @@ export function IMConfigPage() {
   }, [configureState, currentStep, platform, runCommand, verifyState])
 
   const stepItems = [
-    { title: '选择平台' },
-    { title: '创建应用' },
-    { title: '填写凭证' },
-    { title: '自动配置' },
-    { title: '验证连接' },
+    { title: '说明' },
+    { title: '凭证' },
+    { title: '配置' },
+    { title: '验证' },
   ]
 
   const troubleshootingTips = [
     '确认平台应用凭证填写正确且未过期。',
     '确认设备网络可访问平台开放接口。',
     '查看设备详情页日志，检查插件启动报错。',
-    '若刚完成重启，可等待 10-20 秒后再次验证。',
+    '可点击“重试验证”，系统会再次轮询 60 秒。',
   ]
 
   if (loadingDevice && !device) {
@@ -715,6 +623,21 @@ export function IMConfigPage() {
       <div className="center-block">
         <Spin tip="加载设备信息..." />
       </div>
+    )
+  }
+
+  if (!platformMeta) {
+    return (
+      <Result
+        status="warning"
+        title="不支持的 IM 平台"
+        subTitle="请从 IM 配置入口重新选择钉钉或飞书。"
+        extra={
+          <Button type="primary" onClick={() => navigate('/im-config')}>
+            返回 IM 配置入口
+          </Button>
+        }
+      />
     )
   }
 
@@ -726,66 +649,10 @@ export function IMConfigPage() {
     if (currentStep === 0) {
       return (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            请选择需要配置的 IM 平台
-          </Typography.Title>
-          <Row gutter={[16, 16]}>
-            {(Object.keys(PLATFORM_META) as IMPlatform[]).map((item) => {
-              const selected = platform === item
-              const meta = PLATFORM_META[item]
-
-              return (
-                <Col key={item} xs={24} md={12}>
-                  <Card
-                    hoverable
-                    onClick={() => handleSelectPlatform(item)}
-                    style={{
-                      borderColor: selected ? '#1677ff' : undefined,
-                      boxShadow: selected ? '0 0 0 2px rgba(22,119,255,0.2)' : undefined,
-                    }}
-                  >
-                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                      <div
-                        style={{
-                          width: 56,
-                          height: 56,
-                          borderRadius: 12,
-                          background: '#f0f5ff',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontWeight: 700,
-                          fontSize: 16,
-                          color: '#1d4ed8',
-                        }}
-                      >
-                        {meta.name.slice(0, 2)}
-                      </div>
-                      <Typography.Title level={5} style={{ margin: 0 }}>
-                        {meta.name}
-                      </Typography.Title>
-                      <Typography.Text type="secondary">{meta.desc}</Typography.Text>
-                    </Space>
-                  </Card>
-                </Col>
-              )
-            })}
-          </Row>
-        </Space>
-      )
-    }
-
-    if (currentStep === 1) {
-      if (!platformMeta) {
-        return <Alert type="warning" showIcon message="请先返回上一步选择平台" />
-      }
-
-      return (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Alert
             type="info"
             showIcon
-            message={platformMeta.createHint}
+            message={`在 ${platformMeta.name} 开放平台完成应用创建后再继续`}
             description={
               <a href={platformMeta.link} target="_blank" rel="noreferrer">
                 打开平台：{platformMeta.link}
@@ -793,35 +660,37 @@ export function IMConfigPage() {
             }
           />
 
+          <Card size="small" title="配置步骤">
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              {platformMeta.instructionItems.map((item) => (
+                <Typography.Text key={item}>{item}</Typography.Text>
+              ))}
+              <Typography.Text>
+                回调 URL 示例：<Typography.Text code>{platformMeta.callbackPlaceholder}</Typography.Text>
+              </Typography.Text>
+            </Space>
+          </Card>
+
           <Space>
-            <Button onClick={() => setCurrentStep(0)}>上一步</Button>
-            <Button type="primary" onClick={() => setCurrentStep(2)}>
-              我已创建
+            <Button onClick={() => navigate('/im-config')}>返回平台选择</Button>
+            <Button type="primary" onClick={() => setCurrentStep(1)}>
+              下一步
             </Button>
           </Space>
         </Space>
       )
     }
 
-    if (currentStep === 2) {
-      if (!platformMeta) {
-        return <Alert type="warning" showIcon message="请先返回上一步选择平台" />
-      }
-
+    if (currentStep === 1) {
       return (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Form
-            form={form}
-            layout="vertical"
-            initialValues={credentials || { id: '', secret: '' }}
-            style={{ maxWidth: 520 }}
-          >
+          <Form form={form} layout="vertical" initialValues={credentials || { id: '', secret: '' }} style={{ maxWidth: 520 }}>
             <Form.Item
               label={platformMeta.idLabel}
               name="id"
               rules={[
                 { required: true, message: `请输入 ${platformMeta.idLabel}` },
-                { min: 10, message: `${platformMeta.idLabel} 至少 10 位` },
+                { min: 6, message: `${platformMeta.idLabel} 长度至少 6 位` },
               ]}
             >
               <Input autoComplete="off" placeholder={`请输入 ${platformMeta.idLabel}`} />
@@ -831,7 +700,7 @@ export function IMConfigPage() {
               name="secret"
               rules={[
                 { required: true, message: `请输入 ${platformMeta.secretLabel}` },
-                { min: 10, message: `${platformMeta.secretLabel} 至少 10 位` },
+                { min: 6, message: `${platformMeta.secretLabel} 长度至少 6 位` },
               ]}
             >
               <Input.Password autoComplete="new-password" placeholder={`请输入 ${platformMeta.secretLabel}`} />
@@ -839,19 +708,19 @@ export function IMConfigPage() {
           </Form>
 
           <Space>
-            <Button onClick={() => setCurrentStep(1)}>上一步</Button>
+            <Button onClick={() => setCurrentStep(0)}>上一步</Button>
             <Button type="primary" onClick={() => void handleSubmitCredential()}>
-              下一步
+              提交并开始配置
             </Button>
           </Space>
         </Space>
       )
     }
 
-    if (currentStep === 3) {
+    if (currentStep === 2) {
       return (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Typography.Text type="secondary">按顺序执行配置命令，请勿关闭页面。</Typography.Text>
+          <Typography.Text type="secondary">服务器将按顺序执行命令，请勿关闭页面。</Typography.Text>
 
           <Timeline
             items={configureSteps.map((step, index) => {
@@ -861,7 +730,7 @@ export function IMConfigPage() {
                 dot,
                 children: (
                   <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                    <Typography.Text>{`${index + 1}. ${step.title}...`}</Typography.Text>
+                    <Typography.Text>{`${index + 1}. ${step.title}`}</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {step.displayCommand}
                     </Typography.Text>
@@ -872,25 +741,26 @@ export function IMConfigPage() {
             })}
           />
 
-          {configureState === 'running' ? (
-            <Alert type="info" showIcon message="正在执行自动配置，请稍候..." />
-          ) : null}
+          {configureState === 'running' ? <Alert type="info" showIcon message="正在执行自动配置，请稍候..." /> : null}
 
           {configureState === 'failed' ? (
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               <Alert type="error" showIcon message="自动配置失败" description={configureError || '请重试'} />
-              <Button
-                type="primary"
-                onClick={() => {
-                  if (!credentials) {
-                    setCurrentStep(2)
-                    return
-                  }
-                  void runConfigureFlow(credentials)
-                }}
-              >
-                重试
-              </Button>
+              <Space>
+                <Button onClick={() => setCurrentStep(1)}>返回修改凭证</Button>
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    if (!credentials) {
+                      setCurrentStep(1)
+                      return
+                    }
+                    void runConfigureFlow(credentials)
+                  }}
+                >
+                  重新配置
+                </Button>
+              </Space>
             </Space>
           ) : null}
         </Space>
@@ -903,14 +773,14 @@ export function IMConfigPage() {
           <Result
             icon={<Spin />}
             title="正在验证连接"
-            subTitle={verifyMessage || '正在检查通道状态，请稍候...'}
+            subTitle={verifyMessage || '每 5 秒轮询一次，最多持续 60 秒。'}
           />
         ) : null}
 
         {verifyState === 'success' ? (
           <Result
             status="success"
-            title={`✅ ${verifyChannelName || platformMeta?.name || 'IM'}已连接`}
+            title={`✅ ${verifyChannelName || platformMeta.name}已连接`}
             subTitle={verifyMessage || '通道状态正常'}
             extra={
               <Button type="primary" onClick={() => navigate(`/devices/${id}`)}>
@@ -938,7 +808,7 @@ export function IMConfigPage() {
                     重试验证
                   </Button>
                   <Button type="primary" onClick={() => navigate(`/devices/${id}`)}>
-                    完成
+                    返回设备详情
                   </Button>
                 </Space>
               }
@@ -957,9 +827,7 @@ export function IMConfigPage() {
               }
             />
 
-            {verifyRecord?.stderr ? (
-              <Alert type="error" showIcon message="命令错误输出" description={verifyRecord.stderr} />
-            ) : null}
+            {verifyRecord?.stderr ? <Alert type="error" showIcon message="命令错误输出" description={verifyRecord.stderr} /> : null}
           </Space>
         ) : null}
       </Space>
@@ -971,11 +839,11 @@ export function IMConfigPage() {
       <Card>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/devices/${id}`)}>
-              返回设备详情
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/im-config')}>
+              返回平台选择
             </Button>
             <Typography.Title level={4} style={{ margin: 0 }}>
-              IM 配置向导
+              {platformMeta.name} 配置向导
             </Typography.Title>
             <DeviceOnlineTag online={device.online} />
           </Space>

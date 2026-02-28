@@ -21,6 +21,7 @@ import {
   Row,
   Space,
   Spin,
+  Switch,
   Tag,
   Typography,
   message,
@@ -36,6 +37,8 @@ import { formatDateTime, toProgress } from '../utils/format'
 
 const TERMINAL_STATUS = new Set(['completed', 'failed'])
 const COMMAND_POLL_INTERVAL_MS = 1200
+const GATEWAY_STATUS_POLL_INTERVAL_MS = 15000
+const LOG_TAIL_INTERVAL_MS = 6000
 
 type GatewayAction = 'start' | 'stop' | 'restart'
 type DoctorCheckStatus = 'success' | 'warning' | 'error'
@@ -71,6 +74,7 @@ interface SystemResourcesCardProps {
 
 interface ChannelsStatusCardProps {
   device: DeviceSnapshot
+  onRunCommand: RunDeviceCommand
   onConfigure: () => void
 }
 
@@ -427,6 +431,246 @@ function terminalBlockStyle(maxHeight = 320): CSSProperties {
   }
 }
 
+interface UpdateStatusInfo {
+  hasUpdate: boolean
+  availableVersion: string
+  detail?: string
+}
+
+function readBool(value: unknown): boolean | null {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'number') {
+    return value > 0
+  }
+  if (typeof value !== 'string') {
+    return null
+  }
+  const normalized = toLowerText(value)
+  if (!normalized) {
+    return null
+  }
+  if (['true', 'yes', 'available', 'update', 'updates', 'new', '1'].includes(normalized)) {
+    return true
+  }
+  if (
+    ['false', 'no', 'none', 'latest', 'up-to-date', 'uptodate', 'none available', '0'].includes(
+      normalized,
+    )
+  ) {
+    return false
+  }
+  return null
+}
+
+function extractGatewayStatus(parsedOutput: unknown, rawOutput: string): string {
+  const parsedObj = toObject(parsedOutput)
+  if (parsedObj) {
+    const status =
+      firstString(parsedObj, ['gatewayStatus', 'status', 'state', 'health']) ??
+      firstString(toObject(parsedObj.gateway) ?? {}, ['status', 'state', 'health'])
+    if (status) {
+      return status
+    }
+  }
+
+  const lines = rawOutput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  for (const line of lines) {
+    const matched = line.match(/(?:status|state|gateway)\s*[:=]\s*(.+)$/i)
+    if (matched?.[1]) {
+      return matched[1].trim()
+    }
+  }
+  return lines[0] || ''
+}
+
+function parseUpdateStatus(parsedOutput: unknown, fallbackVersion?: string): UpdateStatusInfo {
+  const fallback = (fallbackVersion || '').trim()
+  const fallbackLower = fallback.toLowerCase()
+  const fallbackHasUpdate = Boolean(fallback && !['none', 'false', 'no', '0'].includes(fallbackLower))
+
+  let availableVersion = fallback
+  let hasUpdate = fallbackHasUpdate
+  let detail = ''
+
+  const parsedObj = toObject(parsedOutput)
+  if (!parsedObj) {
+    return { hasUpdate, availableVersion, detail }
+  }
+
+  availableVersion =
+    firstString(parsedObj, [
+      'availableVersion',
+      'latestVersion',
+      'newVersion',
+      'targetVersion',
+      'version',
+      'latest',
+    ]) ?? availableVersion
+
+  const updateFlagCandidates = [
+    parsedObj.hasUpdate,
+    parsedObj.updateAvailable,
+    parsedObj.available,
+    parsedObj.needsUpdate,
+    parsedObj.upgradeAvailable,
+  ]
+
+  for (const candidate of updateFlagCandidates) {
+    const boolValue = readBool(candidate)
+    if (boolValue !== null) {
+      hasUpdate = boolValue
+      break
+    }
+  }
+
+  if (!hasUpdate && availableVersion && availableVersion !== fallback) {
+    hasUpdate = true
+  }
+
+  detail =
+    firstString(parsedObj, ['message', 'detail', 'summary', 'channel']) ??
+    (hasUpdate && availableVersion ? `可升级到 ${availableVersion}` : '已是最新版本')
+
+  return { hasUpdate, availableVersion, detail }
+}
+
+function parseChannelItem(rawName: string, value: unknown): ChannelInfo | null {
+  const name = (rawName || '').trim()
+  if (!name) {
+    return null
+  }
+
+  if (typeof value === 'string') {
+    return { name, status: value.trim() || 'unknown' }
+  }
+
+  if (typeof value === 'boolean') {
+    return { name, status: value ? 'connected' : 'disconnected' }
+  }
+
+  if (typeof value === 'number') {
+    return { name, status: value > 0 ? 'connected' : 'disconnected' }
+  }
+
+  const obj = toObject(value)
+  if (!obj) {
+    return null
+  }
+
+  return {
+    name: firstString(obj, ['name', 'channel']) || name,
+    status: firstString(obj, ['status', 'state', 'health']) || 'unknown',
+    error: firstString(obj, ['error', 'message']),
+    messages: typeof obj.messages === 'number' ? obj.messages : undefined,
+  }
+}
+
+function parseChannelsOutput(rawOutput: string): ChannelInfo[] {
+  const trimmed = rawOutput.trim()
+  if (!trimmed) {
+    return []
+  }
+
+  const parsed = parseJsonOutput(trimmed)
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map((entry, index) => parseChannelItem(`channel-${index + 1}`, entry))
+      .filter((item): item is ChannelInfo => item !== null)
+  }
+
+  const parsedObj = toObject(parsed)
+  if (parsedObj) {
+    const candidateArrays = [parsedObj.channels, parsedObj.items, parsedObj.data]
+    for (const candidate of candidateArrays) {
+      if (!Array.isArray(candidate)) {
+        continue
+      }
+      const arrayItems = candidate
+        .map((entry, index) => parseChannelItem(`channel-${index + 1}`, entry))
+        .filter((item): item is ChannelInfo => item !== null)
+      if (arrayItems.length > 0) {
+        return arrayItems
+      }
+    }
+
+    const mapItems = Object.entries(parsedObj)
+      .map(([key, value]) => parseChannelItem(key, value))
+      .filter((item): item is ChannelInfo => item !== null)
+    if (mapItems.length > 0) {
+      return mapItems
+    }
+  }
+
+  const channels: ChannelInfo[] = []
+  for (const line of trimmed.split('\n')) {
+    const pureLine = line.trim()
+    if (!pureLine) {
+      continue
+    }
+
+    const keyValueMatch = pureLine.match(/^([A-Za-z0-9_.-]+)\s*[:=|-]\s*(.+)$/)
+    if (keyValueMatch?.[1] && keyValueMatch[2]) {
+      channels.push({
+        name: keyValueMatch[1],
+        status: keyValueMatch[2].trim(),
+      })
+      continue
+    }
+
+    const simpleMatch = pureLine.match(
+      /^([A-Za-z0-9_.-]+)\s+(connected|disconnected|offline|online|running|error|failed)\b/i,
+    )
+    if (simpleMatch?.[1] && simpleMatch[2]) {
+      channels.push({
+        name: simpleMatch[1],
+        status: simpleMatch[2],
+      })
+    }
+  }
+
+  const deduped = new Map<string, ChannelInfo>()
+  for (const channel of channels) {
+    deduped.set(channel.name, channel)
+  }
+  return Array.from(deduped.values())
+}
+
+function detectDoctorRepairSupport(parsedOutput: unknown): boolean | null {
+  const obj = toObject(parsedOutput)
+  if (!obj) {
+    return null
+  }
+
+  const direct = [
+    obj.repairAvailable,
+    obj.autoRepair,
+    obj.supportsRepair,
+    obj.canRepair,
+    obj.hasRepair,
+  ]
+  for (const candidate of direct) {
+    const flag = readBool(candidate)
+    if (flag !== null) {
+      return flag
+    }
+  }
+
+  const meta = toObject(obj.meta)
+  if (meta) {
+    const metaFlag = readBool(meta.repairAvailable ?? meta.supportsRepair ?? meta.canRepair)
+    if (metaFlag !== null) {
+      return metaFlag
+    }
+  }
+
+  return null
+}
+
 function GatewayControlCard({
   device,
   onRunCommand,
@@ -434,9 +678,81 @@ function GatewayControlCard({
 }: GatewayControlCardProps) {
   const [loadingAction, setLoadingAction] = useState<GatewayAction | null>(null)
   const [lastResult, setLastResult] = useState<CommandRecord | null>(null)
+  const [statusLoading, setStatusLoading] = useState(false)
+  const [statusText, setStatusText] = useState(device.status?.openclaw.gatewayStatus || '')
+  const [statusUpdatedAt, setStatusUpdatedAt] = useState<number | null>(null)
+  const statusInFlightRef = useRef(false)
 
-  const statusText = device.status?.openclaw.gatewayStatus
-  const statusMeta = gatewayStatusMeta(statusText)
+  useEffect(() => {
+    const nextStatus = (device.status?.openclaw.gatewayStatus || '').trim()
+    if (nextStatus) {
+      setStatusText(nextStatus)
+    }
+  }, [device.status?.openclaw.gatewayStatus])
+
+  const refreshGatewayStatus = useCallback(
+    async (showError: boolean, force = false) => {
+      if (!device.online || (!force && loadingAction !== null) || statusInFlightRef.current) {
+        return
+      }
+
+      statusInFlightRef.current = true
+      setStatusLoading(true)
+      try {
+        const record = await onRunCommand(['gateway', 'status'], 20)
+        const output = (record.stdout || record.stderr || '').trim()
+        const parsedOutput = parseJsonOutput(output)
+        const nextStatus = extractGatewayStatus(parsedOutput, output)
+        if (nextStatus) {
+          setStatusText(nextStatus)
+        }
+        setStatusUpdatedAt(record.updatedAt)
+        if (isCommandFailed(record) && showError) {
+          message.error(record.stderr || '获取网关状态失败')
+        }
+      } catch (err) {
+        if (showError) {
+          message.error(getErrorMessage(err, '获取网关状态失败'))
+        }
+      } finally {
+        statusInFlightRef.current = false
+        setStatusLoading(false)
+      }
+    },
+    [device.online, loadingAction, onRunCommand],
+  )
+
+  useEffect(() => {
+    if (!device.online) {
+      return
+    }
+
+    let cancelled = false
+    let timer: number | null = null
+    const poll = async () => {
+      if (cancelled) {
+        return
+      }
+      await refreshGatewayStatus(false, true)
+      if (cancelled) {
+        return
+      }
+      timer = window.setTimeout(() => {
+        void poll()
+      }, GATEWAY_STATUS_POLL_INTERVAL_MS)
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== null) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [device.id, device.online, refreshGatewayStatus])
+
+  const effectiveStatus = (statusText || device.status?.openclaw.gatewayStatus || '').trim()
+  const statusMeta = gatewayStatusMeta(effectiveStatus)
   const isOffline = !device.online
   const isBusy = loadingAction !== null
 
@@ -453,6 +769,7 @@ function GatewayControlCard({
       }
 
       await onRefreshDevice()
+      await refreshGatewayStatus(false, true)
     } catch (err) {
       message.error(getErrorMessage(err, '网关操作失败'))
     } finally {
@@ -465,8 +782,21 @@ function GatewayControlCard({
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Space>
           <Typography.Text>当前状态：</Typography.Text>
-          <Tag color={statusMeta.color}>{statusMeta.text}</Tag>
+          <Tag color={statusMeta.color}>{statusMeta.text || '未知'}</Tag>
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            loading={statusLoading}
+            disabled={isOffline || isBusy}
+            onClick={() => void refreshGatewayStatus(true)}
+          >
+            刷新状态
+          </Button>
         </Space>
+
+        {statusUpdatedAt ? (
+          <Typography.Text type="secondary">状态更新时间：{formatDateTime(statusUpdatedAt)}</Typography.Text>
+        ) : null}
 
         <Space wrap>
           <Button
@@ -523,13 +853,66 @@ function OpenClawUpdateCard({
   onRunCommand,
   onRefreshDevice,
 }: OpenClawUpdateCardProps) {
+  const [checkingStatus, setCheckingStatus] = useState(false)
   const [updating, setUpdating] = useState(false)
+  const [statusResult, setStatusResult] = useState<CommandRecord | null>(null)
   const [updateResult, setUpdateResult] = useState<CommandRecord | null>(null)
+  const [statusInfo, setStatusInfo] = useState<UpdateStatusInfo>(() =>
+    parseUpdateStatus(null, device.status?.openclaw.updateAvailable),
+  )
 
   const currentVersion = device.status?.openclaw.version || device.openclawVersion || '--'
-  const updateAvailable = (device.status?.openclaw.updateAvailable || '').trim()
-  const updateLower = updateAvailable.toLowerCase()
-  const hasUpdate = Boolean(updateAvailable && !['none', 'false', 'no', '0'].includes(updateLower))
+  const updateAvailable = statusInfo.availableVersion
+  const hasUpdate = statusInfo.hasUpdate
+
+  useEffect(() => {
+    setStatusResult(null)
+    setUpdateResult(null)
+    setStatusInfo(parseUpdateStatus(null, device.status?.openclaw.updateAvailable))
+  }, [device.id])
+
+  useEffect(() => {
+    if (statusResult) {
+      return
+    }
+    setStatusInfo(parseUpdateStatus(null, device.status?.openclaw.updateAvailable))
+  }, [device.status?.openclaw.updateAvailable, statusResult])
+
+  const checkUpdateStatus = useCallback(
+    async (showSuccessMessage: boolean) => {
+      if (!device.online || updating) {
+        return
+      }
+
+      setCheckingStatus(true)
+      try {
+        const record = await onRunCommand(['update', 'status', '--json'], 45)
+        setStatusResult(record)
+
+        const output = (record.stdout || record.stderr || '').trim()
+        const parsedOutput = parseJsonOutput(output)
+        setStatusInfo(parseUpdateStatus(parsedOutput, device.status?.openclaw.updateAvailable))
+
+        if (isCommandFailed(record)) {
+          message.error(record.stderr || '检查更新失败')
+        } else if (showSuccessMessage) {
+          message.success('更新状态已刷新')
+        }
+      } catch (err) {
+        message.error(getErrorMessage(err, '检查更新失败'))
+      } finally {
+        setCheckingStatus(false)
+      }
+    },
+    [device.online, device.status?.openclaw.updateAvailable, onRunCommand, updating],
+  )
+
+  useEffect(() => {
+    if (!device.online) {
+      return
+    }
+    void checkUpdateStatus(false)
+  }, [checkUpdateStatus, device.id, device.online])
 
   const handleUpdate = async () => {
     setUpdating(true)
@@ -544,6 +927,7 @@ function OpenClawUpdateCard({
       }
 
       await onRefreshDevice()
+      await checkUpdateStatus(false)
     } catch (err) {
       message.error(getErrorMessage(err, '升级执行失败'))
     } finally {
@@ -560,13 +944,24 @@ function OpenClawUpdateCard({
     <Card
       title="OpenClaw 升级"
       extra={
-        hasUpdate ? (
-          <Button type="primary" loading={updating} disabled={!device.online} onClick={() => void handleUpdate()}>
-            升级到 {updateAvailable}
+        <Space>
+          <Button
+            icon={<ReloadOutlined />}
+            loading={checkingStatus}
+            disabled={!device.online || updating}
+            onClick={() => void checkUpdateStatus(true)}
+          >
+            检查更新
           </Button>
-        ) : (
-          <Tag color="default">已是最新</Tag>
-        )
+          <Button
+            type="primary"
+            loading={updating}
+            disabled={!device.online || checkingStatus || !hasUpdate}
+            onClick={() => void handleUpdate()}
+          >
+            Update Now
+          </Button>
+        </Space>
       }
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -577,15 +972,25 @@ function OpenClawUpdateCard({
 
         <Space>
           <Typography.Text>可用更新：</Typography.Text>
-          {hasUpdate ? <Tag color="processing">{updateAvailable}</Tag> : <Tag color="success">无</Tag>}
+          {hasUpdate ? <Tag color="processing">{updateAvailable || '有可用更新'}</Tag> : <Tag color="success">无</Tag>}
         </Space>
+
+        <Typography.Text type="secondary">{statusInfo.detail || (hasUpdate ? '有可用更新' : '已是最新')}</Typography.Text>
 
         {!device.online ? <Alert type="warning" showIcon message="设备离线，无法执行升级" /> : null}
 
         {updating ? (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Typography.Text type="secondary">升级中，请稍候...</Typography.Text>
-            <Progress percent={70} status="active" showInfo={false} />
+            <Progress percent={75} status="active" showInfo={false} />
+          </Space>
+        ) : null}
+
+        {statusResult ? (
+          <Space>
+            <Typography.Text type="secondary">状态检查：</Typography.Text>
+            {commandStatusTag(statusResult.status)}
+            <Typography.Text type="secondary">{formatDateTime(statusResult.updatedAt)}</Typography.Text>
           </Space>
         ) : null}
 
@@ -608,32 +1013,51 @@ function OpenClawUpdateCard({
 
 function DoctorDiagnosticsCard({ device, onRunCommand }: DoctorDiagnosticsCardProps) {
   const [running, setRunning] = useState(false)
+  const [repairing, setRepairing] = useState(false)
   const [result, setResult] = useState<CommandRecord | null>(null)
+  const [repairResult, setRepairResult] = useState<CommandRecord | null>(null)
   const [checks, setChecks] = useState<DoctorCheckItem[]>([])
   const [rawText, setRawText] = useState('')
+  const [repairSupported, setRepairSupported] = useState(true)
+
+  useEffect(() => {
+    setResult(null)
+    setRepairResult(null)
+    setChecks([])
+    setRawText('')
+    setRepairSupported(true)
+  }, [device.id])
+
+  const applyDoctorOutput = (record: CommandRecord) => {
+    const rawOutput = (record.stdout || record.stderr || '').trim()
+    const parsedOutput = parseJsonOutput(rawOutput)
+
+    if (parsedOutput !== null) {
+      const nextChecks = extractDoctorChecks(parsedOutput)
+      setChecks(nextChecks)
+      const supportFlag = detectDoctorRepairSupport(parsedOutput)
+      if (supportFlag !== null) {
+        setRepairSupported(supportFlag)
+      }
+
+      if (nextChecks.length === 0) {
+        setRawText(JSON.stringify(parsedOutput, null, 2))
+      } else {
+        setRawText('')
+      }
+      return
+    }
+
+    setChecks([])
+    setRawText(rawOutput || '（无输出）')
+  }
 
   const handleRunDoctor = async () => {
     setRunning(true)
     try {
       const record = await onRunCommand(['doctor', '--json'], 60)
       setResult(record)
-
-      const rawOutput = (record.stdout || record.stderr || '').trim()
-      const parsedOutput = parseJsonOutput(rawOutput)
-
-      if (parsedOutput !== null) {
-        const nextChecks = extractDoctorChecks(parsedOutput)
-        setChecks(nextChecks)
-
-        if (nextChecks.length === 0) {
-          setRawText(JSON.stringify(parsedOutput, null, 2))
-        } else {
-          setRawText('')
-        }
-      } else {
-        setChecks([])
-        setRawText(rawOutput || '（无输出）')
-      }
+      applyDoctorOutput(record)
 
       if (isCommandFailed(record)) {
         message.error(record.stderr || '诊断执行失败')
@@ -647,13 +1071,39 @@ function DoctorDiagnosticsCard({ device, onRunCommand }: DoctorDiagnosticsCardPr
     }
   }
 
+  const handleAutoRepair = async () => {
+    setRepairing(true)
+    try {
+      const record = await onRunCommand(['doctor', '--repair', '--json'], 120)
+      setRepairResult(record)
+      applyDoctorOutput(record)
+
+      if (isCommandFailed(record)) {
+        message.error(record.stderr || '自动修复失败')
+      } else {
+        message.success('自动修复执行完成')
+      }
+    } catch (err) {
+      message.error(getErrorMessage(err, '自动修复失败'))
+    } finally {
+      setRepairing(false)
+    }
+  }
+
   return (
     <Card
       title="诊断"
       extra={
-        <Button type="primary" loading={running} disabled={!device.online} onClick={() => void handleRunDoctor()}>
-          运行诊断
-        </Button>
+        <Space>
+          <Button type="primary" loading={running} disabled={!device.online || repairing} onClick={() => void handleRunDoctor()}>
+            Run Diagnostics
+          </Button>
+          {repairSupported ? (
+            <Button loading={repairing} disabled={!device.online || running} onClick={() => void handleAutoRepair()}>
+              Auto Repair
+            </Button>
+          ) : null}
+        </Space>
       }
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -693,6 +1143,14 @@ function DoctorDiagnosticsCard({ device, onRunCommand }: DoctorDiagnosticsCardPr
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未运行诊断" />
         )}
+
+        {repairResult ? (
+          <Space>
+            <Typography.Text type="secondary">最近修复：</Typography.Text>
+            {commandStatusTag(repairResult.status)}
+            <Typography.Text type="secondary">{formatDateTime(repairResult.updatedAt)}</Typography.Text>
+          </Space>
+        ) : null}
       </Space>
     </Card>
   )
@@ -751,75 +1209,183 @@ function SystemResourcesCard({ device }: SystemResourcesCardProps) {
   )
 }
 
-function ChannelsStatusCard({ device, onConfigure }: ChannelsStatusCardProps) {
-  const channels = device.status?.openclaw.channels ?? []
+function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatusCardProps) {
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<CommandRecord | null>(null)
+  const [rawOutput, setRawOutput] = useState('')
+  const [channels, setChannels] = useState<ChannelInfo[]>(device.status?.openclaw.channels ?? [])
+
+  useEffect(() => {
+    setResult(null)
+    setRawOutput('')
+    setChannels(device.status?.openclaw.channels ?? [])
+  }, [device.id])
+
+  useEffect(() => {
+    if (result) {
+      return
+    }
+    setChannels(device.status?.openclaw.channels ?? [])
+  }, [device.status?.openclaw.channels, result])
+
+  const refreshChannelsStatus = useCallback(
+    async (showSuccessMessage: boolean) => {
+      if (!device.online) {
+        return
+      }
+      setLoading(true)
+      try {
+        const record = await onRunCommand(['channels', 'status'], 30)
+        setResult(record)
+
+        const output = (record.stdout || record.stderr || '').trim()
+        const parsedChannels = parseChannelsOutput(output)
+        if (parsedChannels.length > 0) {
+          setChannels(parsedChannels)
+          setRawOutput('')
+        } else {
+          setChannels(device.status?.openclaw.channels ?? [])
+          setRawOutput(output)
+        }
+
+        if (isCommandFailed(record)) {
+          message.error(record.stderr || '读取 IM 通道状态失败')
+        } else if (showSuccessMessage) {
+          message.success('IM 通道状态已刷新')
+        }
+      } catch (err) {
+        message.error(getErrorMessage(err, '读取 IM 通道状态失败'))
+      } finally {
+        setLoading(false)
+      }
+    },
+    [device.online, device.status?.openclaw.channels, onRunCommand],
+  )
+
+  useEffect(() => {
+    if (!device.online) {
+      return
+    }
+    void refreshChannelsStatus(false)
+  }, [device.id, device.online, refreshChannelsStatus])
 
   return (
     <Card
       title="IM 通道状态"
       extra={
-        <Button type="primary" icon={<SettingOutlined />} onClick={onConfigure}>
-          配置 IM
-        </Button>
+        <Space>
+          <Button
+            icon={<ReloadOutlined />}
+            loading={loading}
+            disabled={!device.online}
+            onClick={() => void refreshChannelsStatus(true)}
+          >
+            刷新
+          </Button>
+          <Button type="primary" icon={<SettingOutlined />} onClick={onConfigure}>
+            配置 IM
+          </Button>
+        </Space>
       }
     >
-      {channels.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无通道配置" />
-      ) : (
-        <List
-          size="small"
-          bordered
-          dataSource={channels}
-          renderItem={(channel: ChannelInfo) => {
-            const statusMeta = channelStatusMeta(channel.status)
-            return (
-              <List.Item>
-                <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                    <Typography.Text strong>{channel.name || '未命名通道'}</Typography.Text>
-                    <Tag color={statusMeta.color}>{statusMeta.text}</Tag>
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        {!device.online ? <Alert type="warning" showIcon message="设备离线，无法读取 IM 通道状态" /> : null}
+
+        {result ? (
+          <Space>
+            <Typography.Text type="secondary">最近检查：</Typography.Text>
+            {commandStatusTag(result.status)}
+            <Typography.Text type="secondary">{formatDateTime(result.updatedAt)}</Typography.Text>
+          </Space>
+        ) : null}
+
+        {channels.length === 0 ? (
+          rawOutput ? (
+            <pre style={terminalBlockStyle(200)}>{rawOutput}</pre>
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无通道配置" />
+          )
+        ) : (
+          <List
+            size="small"
+            bordered
+            dataSource={channels}
+            renderItem={(channel: ChannelInfo) => {
+              const statusMeta = channelStatusMeta(channel.status)
+              return (
+                <List.Item>
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                      <Typography.Text strong>{channel.name || '未命名通道'}</Typography.Text>
+                      <Tag color={statusMeta.color}>{statusMeta.text}</Tag>
+                    </Space>
+                    {channel.error ? <Typography.Text type="danger">{channel.error}</Typography.Text> : null}
+                    {typeof channel.messages === 'number' ? (
+                      <Typography.Text type="secondary">消息数：{channel.messages}</Typography.Text>
+                    ) : null}
                   </Space>
-                  {channel.error ? <Typography.Text type="danger">{channel.error}</Typography.Text> : null}
-                  {typeof channel.messages === 'number' ? (
-                    <Typography.Text type="secondary">消息数：{channel.messages}</Typography.Text>
-                  ) : null}
-                </Space>
-              </List.Item>
-            )
-          }}
-        />
-      )}
+                </List.Item>
+              )
+            }}
+          />
+        )}
+      </Space>
     </Card>
   )
 }
 
 function LogViewerCard({ device, onRunCommand }: LogViewerCardProps) {
   const [loading, setLoading] = useState(false)
+  const [tailMode, setTailMode] = useState(false)
   const [logs, setLogs] = useState('')
   const [result, setResult] = useState<CommandRecord | null>(null)
   const logRef = useRef<HTMLPreElement | null>(null)
+  const readInFlightRef = useRef(false)
 
-  const handleViewLogs = async () => {
-    setLoading(true)
-    try {
-      const record = await onRunCommand(['logs'], 30)
-      setResult(record)
+  useEffect(() => {
+    setTailMode(false)
+    setLogs('')
+    setResult(null)
+    setLoading(false)
+  }, [device.id])
 
-      const stdout = (record.stdout || '').trim()
-      const stderr = (record.stderr || '').trim()
-      const output = [stdout, stderr ? `【错误输出】\n${stderr}` : ''].filter(Boolean).join('\n\n')
-
-      setLogs(output || '（无输出）')
-
-      if (isCommandFailed(record)) {
-        message.error(record.stderr || '日志获取失败')
+  const refreshLogs = useCallback(
+    async (showErrorMessage: boolean, withLoading: boolean) => {
+      if (!device.online || readInFlightRef.current) {
+        return
       }
-    } catch (err) {
-      message.error(getErrorMessage(err, '日志获取失败'))
-    } finally {
-      setLoading(false)
-    }
-  }
+
+      readInFlightRef.current = true
+      if (withLoading) {
+        setLoading(true)
+      }
+
+      try {
+        const record = await onRunCommand(['logs'], 30)
+        setResult(record)
+
+        const stdout = (record.stdout || '').trim()
+        const stderr = (record.stderr || '').trim()
+        const output = [stdout, stderr ? `【错误输出】\n${stderr}` : ''].filter(Boolean).join('\n\n')
+
+        setLogs(output || '（无输出）')
+
+        if (isCommandFailed(record) && showErrorMessage) {
+          message.error(record.stderr || '日志获取失败')
+        }
+      } catch (err) {
+        if (showErrorMessage) {
+          message.error(getErrorMessage(err, '日志获取失败'))
+        }
+      } finally {
+        readInFlightRef.current = false
+        if (withLoading) {
+          setLoading(false)
+        }
+      }
+    },
+    [device.online, onRunCommand],
+  )
 
   useEffect(() => {
     if (logRef.current) {
@@ -827,13 +1393,54 @@ function LogViewerCard({ device, onRunCommand }: LogViewerCardProps) {
     }
   }, [logs])
 
+  useEffect(() => {
+    if (!tailMode || !device.online) {
+      return
+    }
+
+    let cancelled = false
+    let timer: number | null = null
+
+    const poll = async () => {
+      if (cancelled) {
+        return
+      }
+      await refreshLogs(false, false)
+      if (cancelled) {
+        return
+      }
+      timer = window.setTimeout(() => {
+        void poll()
+      }, LOG_TAIL_INTERVAL_MS)
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== null) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [tailMode, device.id, device.online, refreshLogs])
+
   return (
     <Card
       title="日志查看"
       extra={
-        <Button type="primary" loading={loading} disabled={!device.online} onClick={() => void handleViewLogs()}>
-          查看日志
-        </Button>
+        <Space>
+          <Space size={6}>
+            <Typography.Text type="secondary">Tail</Typography.Text>
+            <Switch checked={tailMode} onChange={setTailMode} disabled={!device.online} />
+          </Space>
+          <Button
+            type="primary"
+            loading={loading}
+            disabled={!device.online}
+            onClick={() => void refreshLogs(true, true)}
+          >
+            查看日志
+          </Button>
+        </Space>
       }
     >
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -1082,7 +1689,11 @@ export function DeviceDetailPage() {
           <DoctorDiagnosticsCard device={device} onRunCommand={runCommand} />
         </Col>
         <Col xs={24} md={24} xl={8}>
-          <ChannelsStatusCard device={device} onConfigure={() => navigate(`/devices/${id}/im-config`)} />
+          <ChannelsStatusCard
+            device={device}
+            onRunCommand={runCommand}
+            onConfigure={() => navigate(`/devices/${id}/im-config`)}
+          />
         </Col>
       </Row>
 

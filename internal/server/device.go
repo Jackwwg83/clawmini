@@ -30,6 +30,7 @@ type DeviceSnapshot struct {
 	Hostname        string        `json:"hostname"`
 	OS              string        `json:"os"`
 	Arch            string        `json:"arch"`
+	HasOpenClaw     bool          `json:"hasOpenClaw"`
 	OpenClawVersion string        `json:"openclawVersion,omitempty"`
 	ClientVersion   string        `json:"clientVersion"`
 	CreatedAtUnix   int64         `json:"createdAt"`
@@ -67,7 +68,7 @@ func NewDeviceStore(db *sql.DB) *DeviceStore {
 }
 
 func (s *DeviceStore) EnsureSchema() error {
-	return ensureSchemaMigrations(s.db, schemaNameDevices, 1, map[int]string{
+	return ensureSchemaMigrations(s.db, schemaNameDevices, 2, map[int]string{
 		1: `
 CREATE TABLE IF NOT EXISTS devices (
 	id TEXT PRIMARY KEY,
@@ -97,6 +98,9 @@ CREATE TABLE IF NOT EXISTS device_status (
 	updated_at INTEGER NOT NULL
 );
 `,
+		2: `
+ALTER TABLE devices ADD COLUMN has_openclaw INTEGER NOT NULL DEFAULT 0;
+`,
 	})
 }
 
@@ -106,18 +110,23 @@ func nowUnix() int64 {
 
 func (s *DeviceStore) UpsertDevice(reg protocol.RegisterPayload) error {
 	now := nowUnix()
+	hasOpenClaw := 0
+	if reg.HasOpenClaw {
+		hasOpenClaw = 1
+	}
 	_, err := s.db.Exec(`
-INSERT INTO devices(id, hostname, os, arch, openclaw_version, client_version, created_at, updated_at, last_seen_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO devices(id, hostname, os, arch, has_openclaw, openclaw_version, client_version, created_at, updated_at, last_seen_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	hostname=excluded.hostname,
 	os=excluded.os,
 	arch=excluded.arch,
+	has_openclaw=excluded.has_openclaw,
 	openclaw_version=excluded.openclaw_version,
 	client_version=excluded.client_version,
 	updated_at=excluded.updated_at,
 	last_seen_at=excluded.last_seen_at;
-`, reg.DeviceID, reg.Hostname, reg.OS, reg.Arch, reg.OpenClawVersion, reg.ClientVersion, now, now, now)
+`, reg.DeviceID, reg.Hostname, reg.OS, reg.Arch, hasOpenClaw, reg.OpenClawVersion, reg.ClientVersion, now, now, now)
 	return err
 }
 
@@ -137,9 +146,9 @@ func (s *DeviceStore) UpdateHeartbeat(hb protocol.HeartbeatPayload) error {
 
 	if _, err := tx.Exec(`
 UPDATE devices
-SET updated_at=?, last_seen_at=?, openclaw_version=CASE WHEN ? = '' THEN openclaw_version ELSE ? END
+SET updated_at=?, last_seen_at=?, has_openclaw=?, openclaw_version=CASE WHEN ? = '' THEN openclaw_version ELSE ? END
 WHERE id=?;
-`, now, now, hb.OpenClaw.Version, hb.OpenClaw.Version, hb.DeviceID); err != nil {
+`, now, now, installed, hb.OpenClaw.Version, hb.OpenClaw.Version, hb.DeviceID); err != nil {
 		return err
 	}
 
@@ -171,6 +180,7 @@ ON CONFLICT(device_id) DO UPDATE SET
 func (s *DeviceStore) ListDevices() ([]DeviceSnapshot, error) {
 	rows, err := s.db.Query(`
 SELECT d.id, d.hostname, d.os, d.arch, d.openclaw_version, d.client_version,
+	d.has_openclaw,
 	d.created_at, d.updated_at, d.last_seen_at,
 	s.cpu_usage, s.mem_total, s.mem_used, s.disk_total, s.disk_used, s.uptime,
 	s.openclaw_installed, s.openclaw_version, s.gateway_status, s.update_available, s.channels_json, s.updated_at
@@ -197,6 +207,7 @@ ORDER BY d.updated_at DESC;
 func (s *DeviceStore) GetDevice(id string) (DeviceSnapshot, error) {
 	row := s.db.QueryRow(`
 SELECT d.id, d.hostname, d.os, d.arch, d.openclaw_version, d.client_version,
+	d.has_openclaw,
 	d.created_at, d.updated_at, d.last_seen_at,
 	s.cpu_usage, s.mem_total, s.mem_used, s.disk_total, s.disk_used, s.uptime,
 	s.openclaw_installed, s.openclaw_version, s.gateway_status, s.update_available, s.channels_json, s.updated_at
@@ -234,6 +245,7 @@ func scanDeviceSnapshot(scanner interface {
 	Scan(dest ...interface{}) error
 }) (DeviceSnapshot, error) {
 	var snap DeviceSnapshot
+	var hasOpenClaw int64
 	var statusUpdated sql.NullInt64
 	var statusCPU sql.NullFloat64
 	var statusMemTotal, statusMemUsed sql.NullInt64
@@ -243,12 +255,14 @@ func scanDeviceSnapshot(scanner interface {
 	var statusVersion, statusGateway, statusUpdate, channels sql.NullString
 	if err := scanner.Scan(
 		&snap.ID, &snap.Hostname, &snap.OS, &snap.Arch, &snap.OpenClawVersion, &snap.ClientVersion,
+		&hasOpenClaw,
 		&snap.CreatedAtUnix, &snap.UpdatedAtUnix, &snap.LastSeenAtUnix,
 		&statusCPU, &statusMemTotal, &statusMemUsed, &statusDiskTotal, &statusDiskUsed, &statusUptime,
 		&statusInstalled, &statusVersion, &statusGateway, &statusUpdate, &channels, &statusUpdated,
 	); err != nil {
 		return DeviceSnapshot{}, err
 	}
+	snap.HasOpenClaw = hasOpenClaw == 1
 
 	snap.Online = (nowUnix() - snap.LastSeenAtUnix) <= 90
 	if statusUpdated.Valid {
@@ -273,6 +287,48 @@ func scanDeviceSnapshot(scanner interface {
 		snap.Status = st
 	}
 	return snap, nil
+}
+
+func (s *DeviceStore) UpdateOpenClawState(deviceID string, installed bool, version string) error {
+	installedInt := 0
+	if installed {
+		installedInt = 1
+	}
+	now := nowUnix()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.Exec(`
+UPDATE devices
+SET has_openclaw=?, openclaw_version=?, updated_at=?, last_seen_at=CASE WHEN last_seen_at < ? THEN ? ELSE last_seen_at END
+WHERE id=?;
+`, installedInt, version, now, now, now, deviceID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+
+	if _, err := tx.Exec(`
+INSERT INTO device_status(device_id, openclaw_installed, openclaw_version, gateway_status, updated_at)
+VALUES(?, ?, ?, COALESCE((SELECT gateway_status FROM device_status WHERE device_id=?), 'unknown'), ?)
+ON CONFLICT(device_id) DO UPDATE SET
+	openclaw_installed=excluded.openclaw_installed,
+	openclaw_version=excluded.openclaw_version,
+	updated_at=excluded.updated_at;
+`, deviceID, installedInt, version, deviceID, now); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 var ErrNotFound = errors.New("not found")

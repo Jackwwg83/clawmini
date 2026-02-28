@@ -9,6 +9,8 @@ const (
 	schemaNameDevices    = "devices"
 	schemaNameCommands   = "commands"
 	schemaNameJoinTokens = "join_tokens"
+	schemaNameBatchJobs  = "batch_jobs"
+	schemaNameAuditLog   = "audit_log"
 )
 
 func ensureSchemaMigrations(db *sql.DB, schemaName string, targetVersion int, migrations map[int]string) error {

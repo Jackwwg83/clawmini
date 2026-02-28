@@ -28,6 +28,7 @@ func TestEnvelopeJSONRoundTripForAllMessageTypes(t *testing.T) {
 				Token:           "device-token",
 				OS:              "linux",
 				Arch:            "amd64",
+				HasOpenClaw:     true,
 				OpenClawVersion: "1.2.3",
 				ClientVersion:   "0.0.1",
 			},

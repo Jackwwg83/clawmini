@@ -5,6 +5,7 @@ import {
   Form,
   Input,
   Modal,
+  Skeleton,
   Select,
   Space,
   Table,
@@ -259,13 +260,17 @@ export function OnboardingPage() {
       </Card>
 
       <Card title="已生成的令牌">
-        <Table<JoinToken>
-          rowKey="id"
-          loading={loading}
-          columns={columns}
-          dataSource={tokens}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-        />
+        {loading && tokens.length === 0 ? (
+          <Skeleton active paragraph={{ rows: 6 }} />
+        ) : (
+          <Table<JoinToken>
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={tokens}
+            pagination={{ pageSize: 8, showSizeChanger: false }}
+          />
+        )}
       </Card>
     </Space>
   )

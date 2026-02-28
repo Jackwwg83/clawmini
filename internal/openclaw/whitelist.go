@@ -2,6 +2,8 @@ package openclaw
 
 import "strings"
 
+const officialInstallScript = "curl -fsSL https://get.openclaw.ai | bash"
+
 // AllowedCommands defines the whitelist of openclaw subcommands the client will execute
 var AllowedCommands = map[string][]string{
 	"status":   {"--json", "--all", "--deep"},
@@ -60,6 +62,29 @@ func ValidateCommand(cmd string, args []string) bool {
 	}
 
 	return true
+}
+
+// ValidateDispatchCommand validates all commands that can be pushed from server to agent.
+// It includes the regular openclaw whitelist plus a tightly scoped OpenClaw bootstrap sequence.
+func ValidateDispatchCommand(cmd string, args []string) bool {
+	if ValidateCommand(cmd, args) {
+		return true
+	}
+
+	switch cmd {
+	case "openclaw":
+		return len(args) == 1 && args[0] == "--version"
+	case "which":
+		return len(args) == 1 && args[0] == "openclaw"
+	case "bash":
+		return len(args) == 2 && args[0] == "-lc" && args[1] == officialInstallScript
+	default:
+		return false
+	}
+}
+
+func OfficialInstallScript() string {
+	return officialInstallScript
 }
 
 func hasValidatedParent(args []string, idx int, allowedSet map[string]struct{}) (string, bool) {

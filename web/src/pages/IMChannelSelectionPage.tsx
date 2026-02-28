@@ -1,5 +1,5 @@
 import { CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Col, Empty, Row, Select, Space, Spin, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Empty, Row, Select, Skeleton, Space, Tag, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { DeviceOnlineTag } from '../components/DeviceOnlineTag'
@@ -138,9 +138,9 @@ export function IMChannelSelectionPage() {
 
   if (loading && devices.length === 0) {
     return (
-      <div className="center-block">
-        <Spin tip="加载设备列表..." />
-      </div>
+      <Card>
+        <Skeleton active paragraph={{ rows: 6 }} />
+      </Card>
     )
   }
 

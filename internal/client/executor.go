@@ -25,7 +25,7 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 	start := time.Now()
 	result := protocol.ResultPayload{CommandID: cmd.CommandID}
 
-	if !openclaw.ValidateCommand(cmd.Command, cmd.Args) {
+	if !openclaw.ValidateDispatchCommand(cmd.Command, cmd.Args) {
 		result.ExitCode = 126
 		result.Stderr = "command rejected by whitelist"
 		result.DurationMs = time.Since(start).Milliseconds()

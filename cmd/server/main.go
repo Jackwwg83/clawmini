@@ -31,6 +31,8 @@ type serverApp struct {
 	devices    *server.DeviceStore
 	commands   *server.CommandStore
 	joinTokens *server.JoinTokenStore
+	batchJobs  *server.BatchJobStore
+	auditLogs  *server.AuditLogStore
 	hub        *server.Hub
 	imConfigs  *configureIMJobStore
 }
@@ -105,6 +107,18 @@ func main() {
 		log.Fatalf("ensure join token schema: %v", err)
 	}
 
+	batchJobStore := server.NewBatchJobStore(db)
+	if err := batchJobStore.EnsureSchema(); err != nil {
+		log.Fatalf("ensure batch jobs schema: %v", err)
+	}
+
+	auditLogStore := server.NewAuditLogStore(db)
+	if err := auditLogStore.EnsureSchema(); err != nil {
+		log.Fatalf("ensure audit log schema: %v", err)
+	}
+	auditLogStore.Start()
+	defer auditLogStore.Stop()
+
 	hub := server.NewHub(deviceStore, commandStore, joinTokenStore, auth)
 	if err := hub.SetAllowedOrigins(splitCSV(*allowedOriginsFlag)); err != nil {
 		log.Fatalf("configure websocket allowed origins: %v", err)
@@ -124,6 +138,8 @@ func main() {
 		devices:    deviceStore,
 		commands:   commandStore,
 		joinTokens: joinTokenStore,
+		batchJobs:  batchJobStore,
+		auditLogs:  auditLogStore,
 		hub:        hub,
 		imConfigs:  imConfigStore,
 	}
@@ -148,8 +164,13 @@ func main() {
 			r.Delete("/devices/{id}", app.handleDeleteDevice)
 			r.Post("/devices/{id}/exec", app.handleExec)
 			r.Get("/devices/{id}/exec/{cmdId}", app.handleGetCommand)
+			r.Post("/devices/{id}/install-openclaw", app.handleInstallOpenClaw)
+			r.Get("/devices/{id}/install-openclaw/{jobId}", app.handleGetInstallOpenClaw)
 			r.Post("/devices/{id}/configure-im", app.handleConfigureIM)
 			r.Get("/devices/{id}/configure-im/{jobId}", app.handleGetConfigureIM)
+			r.Post("/batch/exec", app.handleBatchExec)
+			r.Get("/batch/{jobId}", app.handleGetBatchJob)
+			r.Get("/audit-log", app.handleGetAuditLog)
 			r.Post("/join-tokens", app.handleCreateJoinToken)
 			r.Get("/join-tokens", app.handleListJoinTokens)
 			r.Delete("/join-tokens/{id}", app.handleDeleteJoinToken)
@@ -264,35 +285,43 @@ func (a *serverApp) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *serverApp) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
+	adminIP := clientIP(r.RemoteAddr)
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 	if id == "" {
 		server.WriteError(w, http.StatusBadRequest, "invalid device id")
+		a.logAudit("device.delete", id, "invalid device id", adminIP, "failed")
 		return
 	}
 
 	if _, err := a.devices.GetDevice(id); err != nil {
 		if err == server.ErrNotFound {
 			server.WriteError(w, http.StatusNotFound, "device not found")
+			a.logAudit("device.delete", id, "device not found", adminIP, "failed")
 			return
 		}
 		a.writeInternalError(w, "load device before delete", err)
+		a.logAudit("device.delete", id, err.Error(), adminIP, "failed")
 		return
 	}
 
 	a.hub.DisconnectDevice(id)
 	if err := a.commands.DeleteByDevice(id); err != nil {
 		a.writeInternalError(w, "delete device commands", err)
+		a.logAudit("device.delete", id, err.Error(), adminIP, "failed")
 		return
 	}
 	if err := a.devices.DeleteDevice(id); err != nil {
 		if err == server.ErrNotFound {
 			server.WriteError(w, http.StatusNotFound, "device not found")
+			a.logAudit("device.delete", id, "device not found", adminIP, "failed")
 			return
 		}
 		a.writeInternalError(w, "delete device", err)
+		a.logAudit("device.delete", id, err.Error(), adminIP, "failed")
 		return
 	}
 
+	a.logAudit("device.delete", id, "deleted device", adminIP, "success")
 	server.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -349,13 +378,16 @@ func (a *serverApp) handleDeleteJoinToken(w http.ResponseWriter, r *http.Request
 }
 
 func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
+	adminIP := clientIP(r.RemoteAddr)
 	deviceID := chi.URLParam(r, "id")
 	if _, err := a.devices.GetDevice(deviceID); err != nil {
 		if err == server.ErrNotFound {
 			server.WriteError(w, http.StatusNotFound, "device not found")
+			a.logAudit("command.exec", deviceID, "device not found", adminIP, "failed")
 			return
 		}
 		a.writeInternalError(w, "load device before exec", err)
+		a.logAudit("command.exec", deviceID, err.Error(), adminIP, "failed")
 		return
 	}
 
@@ -367,9 +399,11 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		if isBodyTooLarge(err) {
 			server.WriteError(w, http.StatusRequestEntityTooLarge, "request too large")
+			a.logAudit("command.exec", deviceID, "request too large", adminIP, "failed")
 			return
 		}
 		server.WriteError(w, http.StatusBadRequest, "invalid json")
+		a.logAudit("command.exec", deviceID, "invalid json", adminIP, "failed")
 		return
 	}
 	if req.Command == "" {
@@ -380,13 +414,17 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	if !openclaw.ValidateCommand(req.Command, req.Args) {
 		server.WriteError(w, http.StatusBadRequest, "command not allowed")
+		detail := strings.TrimSpace(req.Command + " " + strings.Join(req.Args, " "))
+		a.logAudit("command.exec", deviceID, detail, adminIP, "rejected")
 		return
 	}
 
 	redactedArgs := server.RedactSensitiveArgs(req.Command, req.Args)
+	commandText := strings.TrimSpace(req.Command + " " + strings.Join(redactedArgs, " "))
 	rec, err := a.commands.Create(deviceID, req.Command, redactedArgs, req.Timeout)
 	if err != nil {
 		a.writeInternalError(w, "create command", err)
+		a.logAudit("command.exec", deviceID, commandText, adminIP, "failed")
 		return
 	}
 
@@ -399,6 +437,7 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 	if err := a.hub.DispatchCommand(deviceID, msg); err != nil {
 		_ = a.commands.MarkFailed(rec.ID, err.Error())
 		server.WriteError(w, http.StatusConflict, "device offline")
+		a.logAudit("command.exec", deviceID, commandText, adminIP, "failed")
 		return
 	}
 
@@ -406,8 +445,10 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("reload command %s for device %s: %v", rec.ID, deviceID, err)
 		server.WriteJSON(w, http.StatusAccepted, rec)
+		a.logAudit("command.exec", deviceID, commandText, adminIP, "accepted")
 		return
 	}
+	a.logAudit("command.exec", deviceID, commandText, adminIP, "accepted")
 	server.WriteJSON(w, http.StatusAccepted, updated)
 }
 

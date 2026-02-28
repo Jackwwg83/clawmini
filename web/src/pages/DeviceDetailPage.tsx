@@ -19,8 +19,8 @@ import {
   Modal,
   Progress,
   Row,
+  Skeleton,
   Space,
-  Spin,
   Switch,
   Tag,
   Typography,
@@ -28,7 +28,15 @@ import {
 } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { deleteDevice, execDeviceCommand, fetchCommandById, fetchDeviceById } from '../api/client'
+import {
+  deleteDevice,
+  execDeviceCommand,
+  fetchCommandById,
+  fetchDeviceById,
+  fetchInstallOpenClawJob,
+  installOpenClaw,
+  type ConfigureIMJob,
+} from '../api/client'
 import { DeviceOnlineTag } from '../components/DeviceOnlineTag'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtime } from '../contexts/RealtimeContext'
@@ -39,6 +47,7 @@ const TERMINAL_STATUS = new Set(['completed', 'failed'])
 const COMMAND_POLL_INTERVAL_MS = 1200
 const GATEWAY_STATUS_POLL_INTERVAL_MS = 15000
 const LOG_TAIL_INTERVAL_MS = 6000
+const INSTALL_JOB_POLL_INTERVAL_MS = 1200
 
 type GatewayAction = 'start' | 'stop' | 'restart'
 type DoctorCheckStatus = 'success' | 'warning' | 'error'
@@ -60,6 +69,12 @@ interface GatewayControlCardProps {
 interface OpenClawUpdateCardProps {
   device: DeviceSnapshot
   onRunCommand: RunDeviceCommand
+  onRefreshDevice: () => Promise<void>
+}
+
+interface OpenClawInstallCardProps {
+  token: string | null
+  device: DeviceSnapshot
   onRefreshDevice: () => Promise<void>
 }
 
@@ -220,6 +235,22 @@ function commandStatusTag(status?: string) {
   }
 
   return <Tag>{status}</Tag>
+}
+
+function installStepStatusTag(status?: string) {
+  if (status === 'success') {
+    return <Tag color="success">成功</Tag>
+  }
+  if (status === 'failed') {
+    return <Tag color="error">失败</Tag>
+  }
+  if (status === 'running') {
+    return <Tag color="processing">执行中</Tag>
+  }
+  if (status === 'skipped') {
+    return <Tag color="default">已跳过</Tag>
+  }
+  return <Tag>待执行</Tag>
 }
 
 function isCommandFailed(record: CommandRecord): boolean {
@@ -1011,6 +1042,124 @@ function OpenClawUpdateCard({
   )
 }
 
+function OpenClawInstallCard({ token, device, onRefreshDevice }: OpenClawInstallCardProps) {
+  const [starting, setStarting] = useState(false)
+  const [job, setJob] = useState<ConfigureIMJob | null>(null)
+  const [lastError, setLastError] = useState('')
+
+  useEffect(() => {
+    setJob(null)
+    setLastError('')
+  }, [device.id])
+
+  useEffect(() => {
+    if (!token || !job) {
+      return
+    }
+    if (job.status !== 'queued' && job.status !== 'running') {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      fetchInstallOpenClawJob(token, device.id, job.id)
+        .then((nextJob) => {
+          setJob(nextJob)
+          if (nextJob.status === 'success') {
+            message.success('OpenClaw 安装完成')
+            void onRefreshDevice()
+          } else if (nextJob.status === 'failed') {
+            message.error(nextJob.error || 'OpenClaw 安装失败')
+            void onRefreshDevice()
+          }
+        })
+        .catch((err) => {
+          setLastError(getErrorMessage(err, '获取安装进度失败'))
+        })
+    }, INSTALL_JOB_POLL_INTERVAL_MS)
+
+    return () => window.clearTimeout(timer)
+  }, [device.id, job, onRefreshDevice, token])
+
+  const startInstall = async () => {
+    if (!token) {
+      message.error('登录状态已失效，请重新登录')
+      return
+    }
+    setStarting(true)
+    setLastError('')
+    try {
+      const created = await installOpenClaw(token, device.id)
+      setJob(created)
+    } catch (err) {
+      setLastError(getErrorMessage(err, '启动安装失败'))
+      message.error(getErrorMessage(err, '启动安装失败'))
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  const detectedVersion =
+    device.status?.openclaw.version || device.openclawVersion || job?.steps.find((step) => step.key === 'verify-version')?.record?.stdout || ''
+
+  return (
+    <Card
+      title="OpenClaw 安装引导"
+      extra={
+        <Button
+          type="primary"
+          disabled={!device.online || starting || job?.status === 'queued' || job?.status === 'running'}
+          loading={starting}
+          onClick={() => void startInstall()}
+        >
+          Install OpenClaw
+        </Button>
+      }
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type="warning"
+          showIcon
+          message="当前设备未检测到 OpenClaw，建议先完成安装再进行诊断和 IM 配置。"
+        />
+
+        {!device.online ? <Alert type="error" showIcon message="设备离线，无法远程安装" /> : null}
+        {lastError ? <Alert type="error" showIcon message={lastError} /> : null}
+
+        {job ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Space>
+              <Typography.Text type="secondary">任务状态：</Typography.Text>
+              {commandStatusTag(job.status)}
+              <Typography.Text type="secondary">{formatDateTime(job.updatedAt)}</Typography.Text>
+            </Space>
+            <List
+              size="small"
+              bordered
+              dataSource={job.steps}
+              renderItem={(step) => (
+                <List.Item>
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                      <Typography.Text>{step.title}</Typography.Text>
+                      {installStepStatusTag(step.status)}
+                    </Space>
+                    <Typography.Text type="secondary">{step.displayCommand}</Typography.Text>
+                    {step.error ? <Typography.Text type="danger">{step.error}</Typography.Text> : null}
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </Space>
+        ) : null}
+
+        {job?.status === 'success' ? (
+          <Alert type="success" showIcon message={`安装成功，版本：${detectedVersion || '已安装'}`} />
+        ) : null}
+      </Space>
+    </Card>
+  )
+}
+
 function DoctorDiagnosticsCard({ device, onRunCommand }: DoctorDiagnosticsCardProps) {
   const [running, setRunning] = useState(false)
   const [repairing, setRepairing] = useState(false)
@@ -1627,9 +1776,9 @@ export function DeviceDetailPage() {
 
   if (loadingDevice && !device) {
     return (
-      <div className="center-block">
-        <Spin tip="加载设备详情..." />
-      </div>
+      <Card>
+        <Skeleton active paragraph={{ rows: 8 }} />
+      </Card>
     )
   }
 
@@ -1667,6 +1816,10 @@ export function DeviceDetailPage() {
           </Space>
         </Space>
       </Card>
+
+      {!device.hasOpenClaw ? (
+        <OpenClawInstallCard token={token} device={device} onRefreshDevice={refreshDevice} />
+      ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>

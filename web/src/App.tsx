@@ -1,8 +1,11 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { AppLayout } from './components/AppLayout'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { RealtimeProvider } from './contexts/RealtimeContext'
+import { AuditLogPage } from './pages/AuditLogPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { DemoPage } from './pages/DemoPage'
 import { DeviceDetailPage } from './pages/DeviceDetailPage'
 import { IMChannelSelectionPage } from './pages/IMChannelSelectionPage'
 import { IMConfigPage } from './pages/IMConfigPage'
@@ -28,9 +31,11 @@ function RequireAuth() {
 function RealtimeLayout() {
   return (
     <RealtimeProvider>
-      <AppLayout>
-        <Outlet />
-      </AppLayout>
+      <ErrorBoundary>
+        <AppLayout>
+          <Outlet />
+        </AppLayout>
+      </ErrorBoundary>
     </RealtimeProvider>
   )
 }
@@ -46,6 +51,8 @@ function AppRoutes() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/onboarding" element={<OnboardingPage />} />
           <Route path="/im-config" element={<IMChannelSelectionPage />} />
+          <Route path="/audit-log" element={<AuditLogPage />} />
+          <Route path="/demo" element={<DemoPage />} />
           <Route path="/devices/:id" element={<DeviceDetailPage />} />
           <Route path="/devices/:id/im-config" element={<IMChannelSelectionPage />} />
           <Route path="/devices/:id/im-config/:platform" element={<IMConfigPage />} />

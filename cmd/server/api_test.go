@@ -36,6 +36,16 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 	if err := joinTokens.EnsureSchema(); err != nil {
 		t.Fatalf("ensure join token schema: %v", err)
 	}
+	batchJobs := server.NewBatchJobStore(db)
+	if err := batchJobs.EnsureSchema(); err != nil {
+		t.Fatalf("ensure batch jobs schema: %v", err)
+	}
+	auditLogs := server.NewAuditLogStore(db)
+	if err := auditLogs.EnsureSchema(); err != nil {
+		t.Fatalf("ensure audit log schema: %v", err)
+	}
+	auditLogs.Start()
+	t.Cleanup(auditLogs.Stop)
 	auth := &server.TokenAuth{AdminToken: "test-admin-token", DeviceToken: "test-device-token"}
 	hub := server.NewHub(devices, commands, joinTokens, auth)
 	imConfigs := newConfigureIMJobStore(db)
@@ -50,6 +60,8 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 		devices:    devices,
 		commands:   commands,
 		joinTokens: joinTokens,
+		batchJobs:  batchJobs,
+		auditLogs:  auditLogs,
 		hub:        hub,
 		imConfigs:  imConfigs,
 	}
@@ -63,8 +75,13 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 			r.Delete("/devices/{id}", app.handleDeleteDevice)
 			r.Post("/devices/{id}/exec", app.handleExec)
 			r.Get("/devices/{id}/exec/{cmdId}", app.handleGetCommand)
+			r.Post("/devices/{id}/install-openclaw", app.handleInstallOpenClaw)
+			r.Get("/devices/{id}/install-openclaw/{jobId}", app.handleGetInstallOpenClaw)
 			r.Post("/devices/{id}/configure-im", app.handleConfigureIM)
 			r.Get("/devices/{id}/configure-im/{jobId}", app.handleGetConfigureIM)
+			r.Post("/batch/exec", app.handleBatchExec)
+			r.Get("/batch/{jobId}", app.handleGetBatchJob)
+			r.Get("/audit-log", app.handleGetAuditLog)
 			r.Post("/join-tokens", app.handleCreateJoinToken)
 			r.Get("/join-tokens", app.handleListJoinTokens)
 			r.Delete("/join-tokens/{id}", app.handleDeleteJoinToken)

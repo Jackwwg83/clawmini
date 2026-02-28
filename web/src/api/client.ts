@@ -1,4 +1,4 @@
-import type { CommandRecord, DeviceSnapshot, JoinToken } from '../types'
+import type { AuditLogPage, BatchJob, CommandRecord, DeviceSnapshot, JoinToken } from '../types'
 
 interface ApiError {
   error?: string
@@ -50,6 +50,16 @@ interface ConfigureIMRequest {
     id: string
     secret: string
   }
+}
+
+interface BatchExecRequest {
+  deviceIds: string[]
+  command: string
+}
+
+interface BatchExecResponse {
+  jobId: string
+  job: BatchJob
 }
 
 const API_BASE = '/api'
@@ -158,6 +168,68 @@ export async function fetchConfigureIMJob(
   jobId: string,
 ): Promise<ConfigureIMJob> {
   return requestJson<ConfigureIMJob>(`/devices/${deviceId}/configure-im/${jobId}`, token)
+}
+
+export async function installOpenClaw(token: string, deviceId: string): Promise<ConfigureIMJob> {
+  return requestJson<ConfigureIMJob>(`/devices/${deviceId}/install-openclaw`, token, {
+    method: 'POST',
+  })
+}
+
+export async function fetchInstallOpenClawJob(
+  token: string,
+  deviceId: string,
+  jobId: string,
+): Promise<ConfigureIMJob> {
+  return requestJson<ConfigureIMJob>(`/devices/${deviceId}/install-openclaw/${jobId}`, token)
+}
+
+export async function startBatchExec(
+  token: string,
+  payload: BatchExecRequest,
+): Promise<BatchExecResponse> {
+  return requestJson<BatchExecResponse>('/batch/exec', token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function fetchBatchJob(token: string, jobId: string): Promise<BatchJob> {
+  return requestJson<BatchJob>(`/batch/${jobId}`, token)
+}
+
+interface FetchAuditLogParams {
+  limit?: number
+  offset?: number
+  deviceId?: string
+  action?: string
+  from?: number
+  to?: number
+}
+
+export async function fetchAuditLog(token: string, params: FetchAuditLogParams): Promise<AuditLogPage> {
+  const search = new URLSearchParams()
+  if (params.limit !== undefined) {
+    search.set('limit', String(params.limit))
+  }
+  if (params.offset !== undefined) {
+    search.set('offset', String(params.offset))
+  }
+  if (params.deviceId) {
+    search.set('device_id', params.deviceId)
+  }
+  if (params.action) {
+    search.set('action', params.action)
+  }
+  if (params.from !== undefined) {
+    search.set('from', String(params.from))
+  }
+  if (params.to !== undefined) {
+    search.set('to', String(params.to))
+  }
+  const qs = search.toString()
+  const path = qs ? `/audit-log?${qs}` : '/audit-log'
+  return requestJson<AuditLogPage>(path, token)
 }
 
 export async function deleteDevice(token: string, id: string): Promise<void> {

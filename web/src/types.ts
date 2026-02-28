@@ -29,6 +29,7 @@ export interface DeviceSnapshot {
   hostname: string
   os: string
   arch: string
+  hasOpenClaw: boolean
   openclawVersion?: string
   clientVersion: string
   createdAt: number
@@ -66,4 +67,44 @@ export interface WsEvent<T = unknown> {
   event: string
   ts: number
   data: T
+}
+
+export interface BatchJobItem {
+  deviceId: string
+  status: 'pending' | 'running' | 'success' | 'error' | string
+  commandId?: string
+  error?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BatchJob {
+  id: string
+  command: string
+  status: 'queued' | 'running' | 'success' | 'failed' | string
+  createdAt: number
+  updatedAt: number
+  totalCount: number
+  pendingCount: number
+  runningCount: number
+  successCount: number
+  errorCount: number
+  items: BatchJobItem[]
+}
+
+export interface AuditLogEntry {
+  id: number
+  timestamp: number
+  action: string
+  targetDeviceId?: string
+  detail?: string
+  adminIp?: string
+  result: string
+}
+
+export interface AuditLogPage {
+  items: AuditLogEntry[]
+  total: number
+  limit: number
+  offset: number
 }

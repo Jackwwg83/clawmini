@@ -98,17 +98,21 @@ func commandErrorText(rec server.CommandRecord, fallback string) string {
 }
 
 func (a *serverApp) handleConfigureIM(w http.ResponseWriter, r *http.Request) {
+	adminIP := clientIP(r.RemoteAddr)
 	deviceID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if deviceID == "" {
 		server.WriteError(w, http.StatusBadRequest, "invalid device id")
+		a.logAudit("im.configure", deviceID, "invalid device id", adminIP, "failed")
 		return
 	}
 	if _, err := a.devices.GetDevice(deviceID); err != nil {
 		if err == server.ErrNotFound {
 			server.WriteError(w, http.StatusNotFound, "device not found")
+			a.logAudit("im.configure", deviceID, "device not found", adminIP, "failed")
 			return
 		}
 		a.writeInternalError(w, "load device before configure im", err)
+		a.logAudit("im.configure", deviceID, err.Error(), adminIP, "failed")
 		return
 	}
 
@@ -116,9 +120,11 @@ func (a *serverApp) handleConfigureIM(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		if isBodyTooLarge(err) {
 			server.WriteError(w, http.StatusRequestEntityTooLarge, "request too large")
+			a.logAudit("im.configure", deviceID, "request too large", adminIP, "failed")
 			return
 		}
 		server.WriteError(w, http.StatusBadRequest, "invalid json")
+		a.logAudit("im.configure", deviceID, "invalid json", adminIP, "failed")
 		return
 	}
 
@@ -127,22 +133,26 @@ func (a *serverApp) handleConfigureIM(w http.ResponseWriter, r *http.Request) {
 	credSecret := strings.TrimSpace(req.Credentials.Secret)
 	if credID == "" || credSecret == "" {
 		server.WriteError(w, http.StatusBadRequest, "credentials are required")
+		a.logAudit("im.configure", deviceID, "credentials are required", adminIP, "failed")
 		return
 	}
 
 	steps, err := initialConfigureSteps(platform)
 	if err != nil {
 		server.WriteError(w, http.StatusBadRequest, err.Error())
+		a.logAudit("im.configure", deviceID, err.Error(), adminIP, "failed")
 		return
 	}
 
 	job, err := a.imConfigs.create(deviceID, platform, steps)
 	if err != nil {
 		a.writeInternalError(w, "create configure-im job", err)
+		a.logAudit("im.configure", deviceID, err.Error(), adminIP, "failed")
 		return
 	}
 
 	go a.runConfigureIMJob(job.ID, deviceID, platform, credID, credSecret)
+	a.logAudit("im.configure", deviceID, "platform="+platform, adminIP, "accepted")
 	server.WriteJSON(w, http.StatusAccepted, job)
 }
 
@@ -363,7 +373,7 @@ func (a *serverApp) runFeishuConfigure(jobID, deviceID, appID, appSecret string)
 }
 
 func (a *serverApp) runConfigureStep(jobID, deviceID string, step configureCommand) error {
-	if !openclaw.ValidateCommand(step.Command, step.Args) {
+	if !openclaw.ValidateDispatchCommand(step.Command, step.Args) {
 		errText := "command not allowed"
 		_ = a.imConfigs.update(jobID, func(job *configureIMResponse) {
 			for i := range job.Steps {

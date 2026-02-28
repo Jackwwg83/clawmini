@@ -19,6 +19,7 @@ func TestDeviceStoreCRUD(t *testing.T) {
 		Hostname:        "host-a",
 		OS:              "linux",
 		Arch:            "amd64",
+		HasOpenClaw:     true,
 		OpenClawVersion: "1.0.0",
 		ClientVersion:   "0.1.0",
 	}
@@ -32,6 +33,9 @@ func TestDeviceStoreCRUD(t *testing.T) {
 	}
 	if snap.ID != reg.DeviceID || snap.Hostname != reg.Hostname {
 		t.Fatalf("snapshot mismatch: %+v", snap)
+	}
+	if !snap.HasOpenClaw {
+		t.Fatalf("expected hasOpenClaw=true from registration")
 	}
 	if snap.Status != nil {
 		t.Fatalf("expected nil status before heartbeat, got %+v", snap.Status)
@@ -71,6 +75,9 @@ func TestDeviceStoreCRUD(t *testing.T) {
 	if snap.OpenClawVersion != "2.0.0" {
 		t.Fatalf("openclaw version not updated: got %q", snap.OpenClawVersion)
 	}
+	if !snap.HasOpenClaw {
+		t.Fatalf("expected hasOpenClaw=true after heartbeat")
+	}
 	if snap.Status == nil {
 		t.Fatalf("expected status after heartbeat")
 	}
@@ -86,6 +93,7 @@ func TestDeviceStoreCRUD(t *testing.T) {
 
 	reg.Hostname = "host-b"
 	reg.ClientVersion = "0.2.0"
+	reg.HasOpenClaw = false
 	reg.OpenClawVersion = "2.1.0"
 	if err := store.UpsertDevice(reg); err != nil {
 		t.Fatalf("upsert device update: %v", err)
@@ -96,6 +104,9 @@ func TestDeviceStoreCRUD(t *testing.T) {
 	}
 	if snap.Hostname != "host-b" || snap.ClientVersion != "0.2.0" || snap.OpenClawVersion != "2.1.0" {
 		t.Fatalf("upsert update not applied: %+v", snap)
+	}
+	if snap.HasOpenClaw {
+		t.Fatalf("expected hasOpenClaw=false after upsert update")
 	}
 
 	list, err := store.ListDevices()

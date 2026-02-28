@@ -18,13 +18,14 @@ type Envelope struct {
 
 // RegisterPayload sent by Client on first connect
 type RegisterPayload struct {
-	DeviceID       string `json:"deviceId"`
-	Hostname       string `json:"hostname"`
-	Token          string `json:"token"`
-	OS             string `json:"os"`
-	Arch           string `json:"arch"`
-	OpenClawVersion string `json:"openclawVersion,omitempty"`
-	ClientVersion  string `json:"clientVersion"`
+	DeviceID        string `json:"deviceId"`
+	Hostname        string `json:"hostname"`
+	Token           string `json:"token"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	HasOpenClaw     bool   `json:"has_openclaw"`
+	OpenClawVersion string `json:"openclaw_version,omitempty"`
+	ClientVersion   string `json:"clientVersion"`
 }
 
 // HeartbeatPayload sent by Client every 30s

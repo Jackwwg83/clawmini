@@ -65,13 +65,19 @@ func runJoin(args []string) error {
 
 	collector := iclient.NewCollector()
 	executor := iclient.NewExecutor()
+	hasOpenClaw, detectedVersion := iclient.DetectOpenClawBinary(ctx)
+	if strings.TrimSpace(*openclawVersion) != "" {
+		detectedVersion = strings.TrimSpace(*openclawVersion)
+		hasOpenClaw = true
+	}
 	conn := iclient.NewConnection(iclient.ConnectionConfig{
 		ServerURL:       wsURL,
 		Token:           *token,
 		DeviceID:        *deviceID,
 		Hostname:        *hostname,
 		ClientVersion:   *clientVersion,
-		OpenClawVersion: *openclawVersion,
+		HasOpenClaw:     hasOpenClaw,
+		OpenClawVersion: detectedVersion,
 	}, collector, executor)
 
 	log.Printf("clawmini-client v%s", defaultClientVersion)

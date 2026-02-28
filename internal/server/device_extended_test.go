@@ -285,3 +285,42 @@ func TestDeviceStoreMultipleDevicesListOrder(t *testing.T) {
 		t.Fatalf("remaining devices missing from list: %+v", ids)
 	}
 }
+
+func TestDeviceStoreUpdateOpenClawState(t *testing.T) {
+	db := openTestDB(t)
+	store := NewDeviceStore(db)
+	if err := store.EnsureSchema(); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	if err := store.UpsertDevice(protocol.RegisterPayload{
+		DeviceID:      "dev-openclaw-state",
+		Hostname:      "host",
+		OS:            "linux",
+		Arch:          "amd64",
+		ClientVersion: "0.1.0",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	if err := store.UpdateOpenClawState("dev-openclaw-state", true, "openclaw v9.9.9"); err != nil {
+		t.Fatalf("update openclaw state: %v", err)
+	}
+
+	snap, err := store.GetDevice("dev-openclaw-state")
+	if err != nil {
+		t.Fatalf("get device: %v", err)
+	}
+	if !snap.HasOpenClaw {
+		t.Fatalf("expected hasOpenClaw=true")
+	}
+	if snap.OpenClawVersion != "openclaw v9.9.9" {
+		t.Fatalf("unexpected version: %q", snap.OpenClawVersion)
+	}
+	if snap.Status == nil {
+		t.Fatalf("expected device status row to exist")
+	}
+	if !snap.Status.OpenClawInfo.Installed {
+		t.Fatalf("expected status.openclaw.installed=true")
+	}
+}

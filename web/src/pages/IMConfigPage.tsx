@@ -13,6 +13,7 @@ import {
   Form,
   Input,
   Result,
+  Skeleton,
   Space,
   Spin,
   Steps,
@@ -620,9 +621,9 @@ export function IMConfigPage() {
 
   if (loadingDevice && !device) {
     return (
-      <div className="center-block">
-        <Spin tip="加载设备信息..." />
-      </div>
+      <Card>
+        <Skeleton active paragraph={{ rows: 8 }} />
+      </Card>
     )
   }
 

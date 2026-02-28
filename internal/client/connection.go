@@ -20,6 +20,7 @@ type ConnectionConfig struct {
 	DeviceID        string
 	Hostname        string
 	ClientVersion   string
+	HasOpenClaw     bool
 	OpenClawVersion string
 }
 
@@ -84,6 +85,7 @@ func (c *Connection) runOnce(ctx context.Context) error {
 		Token:           c.cfg.Token,
 		OS:              runtime.GOOS,
 		Arch:            runtime.GOARCH,
+		HasOpenClaw:     c.cfg.HasOpenClaw,
 		OpenClawVersion: c.cfg.OpenClawVersion,
 		ClientVersion:   c.cfg.ClientVersion,
 	}

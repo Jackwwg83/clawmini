@@ -1,8 +1,10 @@
 import {
+  AuditOutlined,
   DesktopOutlined,
   DisconnectOutlined,
   LogoutOutlined,
   MessageOutlined,
+  PlayCircleOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
 import { Avatar, Badge, Button, Layout, Menu, Space, Typography } from 'antd'
@@ -22,6 +24,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const selectedMenu = useMemo(() => {
     if (location.pathname.startsWith('/im-config') || location.pathname.includes('/im-config')) {
       return ['im-config']
+    }
+    if (location.pathname.startsWith('/audit-log')) {
+      return ['audit-log']
+    }
+    if (location.pathname.startsWith('/demo')) {
+      return ['demo']
     }
     if (location.pathname.startsWith('/devices/')) {
       return ['dashboard']
@@ -59,6 +67,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
               key: 'im-config',
               icon: <MessageOutlined />,
               label: <Link to="/im-config">IM 配置</Link>,
+            },
+            {
+              key: 'audit-log',
+              icon: <AuditOutlined />,
+              label: <Link to="/audit-log">审计日志</Link>,
+            },
+            {
+              key: 'demo',
+              icon: <PlayCircleOutlined />,
+              label: <Link to="/demo">Demo Script</Link>,
             },
           ]}
         />

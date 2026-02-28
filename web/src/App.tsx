@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { RealtimeProvider } from './contexts/RealtimeContext'
 import { DashboardPage } from './pages/DashboardPage'
 import { DeviceDetailPage } from './pages/DeviceDetailPage'
+import { IMChannelSelectionPage } from './pages/IMChannelSelectionPage'
 import { IMConfigPage } from './pages/IMConfigPage'
 import { LoginPage } from './pages/LoginPage'
 import { OnboardingPage } from './pages/OnboardingPage'
@@ -44,8 +45,10 @@ function AppRoutes() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/onboarding" element={<OnboardingPage />} />
+          <Route path="/im-config" element={<IMChannelSelectionPage />} />
           <Route path="/devices/:id" element={<DeviceDetailPage />} />
-          <Route path="/devices/:id/im-config" element={<IMConfigPage />} />
+          <Route path="/devices/:id/im-config" element={<IMChannelSelectionPage />} />
+          <Route path="/devices/:id/im-config/:platform" element={<IMConfigPage />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Route>

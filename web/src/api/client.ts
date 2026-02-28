@@ -22,6 +22,36 @@ interface ExecRequest {
   timeout: number
 }
 
+export interface ConfigureIMStep {
+  key: string
+  title: string
+  displayCommand: string
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | string
+  commandId?: string
+  error?: string
+  record?: CommandRecord
+}
+
+export interface ConfigureIMJob {
+  id: string
+  deviceId: string
+  platform: 'dingtalk' | 'feishu' | string
+  plugin?: string
+  status: 'queued' | 'running' | 'success' | 'failed' | string
+  error?: string
+  steps: ConfigureIMStep[]
+  createdAt: number
+  updatedAt: number
+}
+
+interface ConfigureIMRequest {
+  platform: 'dingtalk' | 'feishu'
+  credentials: {
+    id: string
+    secret: string
+  }
+}
+
 const API_BASE = '/api'
 export const AUTH_TOKEN_STORAGE_KEY = 'clawmini_admin_token'
 
@@ -109,6 +139,25 @@ export async function fetchCommandById(
   cmdId: string,
 ): Promise<CommandRecord> {
   return requestJson<CommandRecord>(`/devices/${deviceId}/exec/${cmdId}`, token)
+}
+
+export async function startConfigureIM(
+  token: string,
+  deviceId: string,
+  payload: ConfigureIMRequest,
+): Promise<ConfigureIMJob> {
+  return requestJson<ConfigureIMJob>(`/devices/${deviceId}/configure-im`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function fetchConfigureIMJob(
+  token: string,
+  deviceId: string,
+  jobId: string,
+): Promise<ConfigureIMJob> {
+  return requestJson<ConfigureIMJob>(`/devices/${deviceId}/configure-im/${jobId}`, token)
 }
 
 export async function deleteDevice(token: string, id: string): Promise<void> {

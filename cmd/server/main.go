@@ -32,6 +32,7 @@ type serverApp struct {
 	commands   *server.CommandStore
 	joinTokens *server.JoinTokenStore
 	hub        *server.Hub
+	imConfigs  *configureIMJobStore
 }
 
 const maxJSONBodyBytes = 1 << 20
@@ -81,6 +82,7 @@ func main() {
 		commands:   commandStore,
 		joinTokens: joinTokenStore,
 		hub:        hub,
+		imConfigs:  newConfigureIMJobStore(),
 	}
 	loginLimiter := newLoginRateLimiter(5, time.Minute)
 
@@ -103,6 +105,8 @@ func main() {
 			r.Delete("/devices/{id}", app.handleDeleteDevice)
 			r.Post("/devices/{id}/exec", app.handleExec)
 			r.Get("/devices/{id}/exec/{cmdId}", app.handleGetCommand)
+			r.Post("/devices/{id}/configure-im", app.handleConfigureIM)
+			r.Get("/devices/{id}/configure-im/{jobId}", app.handleGetConfigureIM)
 			r.Post("/join-tokens", app.handleCreateJoinToken)
 			r.Get("/join-tokens", app.handleListJoinTokens)
 			r.Delete("/join-tokens/{id}", app.handleDeleteJoinToken)

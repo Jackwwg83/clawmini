@@ -45,6 +45,7 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 		commands:   commands,
 		joinTokens: joinTokens,
 		hub:        hub,
+		imConfigs:  newConfigureIMJobStore(),
 	}
 
 	r := chi.NewRouter()
@@ -54,6 +55,10 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 			r.Get("/devices", app.handleListDevices)
 			r.Get("/devices/{id}", app.handleGetDevice)
 			r.Delete("/devices/{id}", app.handleDeleteDevice)
+			r.Post("/devices/{id}/exec", app.handleExec)
+			r.Get("/devices/{id}/exec/{cmdId}", app.handleGetCommand)
+			r.Post("/devices/{id}/configure-im", app.handleConfigureIM)
+			r.Get("/devices/{id}/configure-im/{jobId}", app.handleGetConfigureIM)
 			r.Post("/join-tokens", app.handleCreateJoinToken)
 			r.Get("/join-tokens", app.handleListJoinTokens)
 			r.Delete("/join-tokens/{id}", app.handleDeleteJoinToken)
@@ -488,10 +493,10 @@ func TestShellSingleQuote(t *testing.T) {
 
 func TestWebsocketServerURL(t *testing.T) {
 	cases := []struct {
-		name     string
-		host     string
-		proto    string
-		wantURL  string
+		name    string
+		host    string
+		proto   string
+		wantURL string
 	}{
 		{"plain http", "myhost:18790", "", "ws://myhost:18790/ws"},
 		{"https forwarded", "myhost:443", "https", "wss://myhost:443/ws"},
@@ -515,9 +520,9 @@ func TestWebsocketServerURL(t *testing.T) {
 
 func TestRequestScheme(t *testing.T) {
 	cases := []struct {
-		name   string
-		proto  string
-		want   string
+		name  string
+		proto string
+		want  string
 	}{
 		{"no header", "", "http"},
 		{"https forwarded", "https", "https"},
@@ -762,6 +767,100 @@ func TestInstallScript_WhitespaceToken(t *testing.T) {
 	// After trimming " " is empty
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for whitespace-only token, got %d", rr.Code)
+	}
+}
+
+func TestConfigureIMAPI_InvalidPlatform(t *testing.T) {
+	app, r := setupTestApp(t)
+	if err := app.devices.UpsertDevice(protocol.RegisterPayload{
+		DeviceID:      "dev-im-invalid",
+		Hostname:      "host-im",
+		OS:            "linux",
+		Arch:          "amd64",
+		ClientVersion: "0.1.0",
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
+	rr := doRequest(
+		t,
+		r,
+		http.MethodPost,
+		"/api/devices/dev-im-invalid/configure-im",
+		`{"platform":"wechat","credentials":{"id":"abc1234567","secret":"def1234567"}}`,
+		"test-admin-token",
+	)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestConfigureIMAPI_StartAndPollJob(t *testing.T) {
+	app, r := setupTestApp(t)
+	if err := app.devices.UpsertDevice(protocol.RegisterPayload{
+		DeviceID:      "dev-im-job",
+		Hostname:      "host-im",
+		OS:            "linux",
+		Arch:          "amd64",
+		ClientVersion: "0.1.0",
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
+	rr := doRequest(
+		t,
+		r,
+		http.MethodPost,
+		"/api/devices/dev-im-job/configure-im",
+		`{"platform":"dingtalk","credentials":{"id":"abc1234567","secret":"def1234567"}}`,
+		"test-admin-token",
+	)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var created configureIMResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("expected job id")
+	}
+	if len(created.Steps) != 5 {
+		t.Fatalf("expected 5 steps for dingtalk, got %d", len(created.Steps))
+	}
+
+	var latest configureIMResponse
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		getResp := doRequest(
+			t,
+			r,
+			http.MethodGet,
+			"/api/devices/dev-im-job/configure-im/"+created.ID,
+			"",
+			"test-admin-token",
+		)
+		if getResp.Code != http.StatusOK {
+			t.Fatalf("expected 200 when polling, got %d: %s", getResp.Code, getResp.Body.String())
+		}
+		if err := json.Unmarshal(getResp.Body.Bytes(), &latest); err != nil {
+			t.Fatalf("decode poll response: %v", err)
+		}
+		if latest.Status == "success" || latest.Status == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("configure-im job did not complete in time, latest status=%q", latest.Status)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if latest.Status != "failed" {
+		t.Fatalf("expected offline job to fail, got status=%q", latest.Status)
+	}
+	if latest.Steps[0].Status != "failed" {
+		t.Fatalf("expected first step to fail for offline device, got %q", latest.Steps[0].Status)
 	}
 }
 

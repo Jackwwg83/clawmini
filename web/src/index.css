@@ -1,0 +1,137 @@
+:root {
+  --bg-primary: #f3f7f9;
+  --bg-secondary: #e9f3ef;
+  --card-shadow: 0 18px 40px rgba(15, 23, 42, 0.07);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(56, 189, 248, 0.12), transparent 42%),
+    radial-gradient(circle at 100% 20%, rgba(16, 185, 129, 0.13), transparent 45%),
+    linear-gradient(180deg, var(--bg-secondary), var(--bg-primary));
+  color: #0f172a;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-sider {
+  box-shadow: 8px 0 24px rgba(2, 6, 23, 0.2);
+}
+
+.app-logo {
+  height: 64px;
+  margin: 12px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  color: #e2e8f0;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(16, 185, 129, 0.24));
+}
+
+.app-header {
+  height: 72px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  padding: 0 20px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.app-header-title {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-content {
+  padding: 18px;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(20, 184, 166, 0.24), transparent 32%),
+    radial-gradient(circle at 88% 82%, rgba(8, 145, 178, 0.2), transparent 30%),
+    linear-gradient(145deg, #f8fbfb, #eff6ff);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  box-shadow: var(--card-shadow);
+}
+
+.device-card {
+  height: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.center-block {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cmd-output {
+  margin-top: 8px;
+  margin-bottom: 0;
+  padding: 12px;
+  min-height: 160px;
+  max-height: 320px;
+  overflow: auto;
+  background: #0b1020;
+  color: #d1fae5;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cmd-output-error {
+  color: #fecaca;
+}
+
+@media (max-width: 992px) {
+  .app-header {
+    height: auto;
+    padding: 12px;
+    gap: 10px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-content {
+    padding: 12px;
+  }
+
+  .app-logo span {
+    display: none;
+  }
+}

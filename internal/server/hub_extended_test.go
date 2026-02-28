@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -35,10 +34,9 @@ func testHubServerWithJoinTokens(t *testing.T) (*Hub, *JoinTokenStore, *DeviceSt
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleDeviceWS)
 	mux.HandleFunc("/api/ws", hub.HandleBrowserWS)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	baseHTTPURL := startTCP4HTTPServer(t, mux)
 
-	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+	base := "ws" + strings.TrimPrefix(baseHTTPURL, "http")
 	return hub, joinTokens, devices, commands, base + "/ws"
 }
 

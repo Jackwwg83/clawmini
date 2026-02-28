@@ -8,6 +8,8 @@ func TestEnsureSchemaVersionTable(t *testing.T) {
 	devices := NewDeviceStore(db)
 	commands := NewCommandStore(db)
 	joinTokens := NewJoinTokenStore(db)
+	adminSettings := NewAdminTokenStore(db)
+	imJobs := NewIMConfigJobStore(db)
 
 	if err := devices.EnsureSchema(); err != nil {
 		t.Fatalf("ensure device schema: %v", err)
@@ -18,6 +20,12 @@ func TestEnsureSchemaVersionTable(t *testing.T) {
 	if err := joinTokens.EnsureSchema(); err != nil {
 		t.Fatalf("ensure join token schema: %v", err)
 	}
+	if err := adminSettings.EnsureSchema(); err != nil {
+		t.Fatalf("ensure admin settings schema: %v", err)
+	}
+	if err := imJobs.EnsureSchema(); err != nil {
+		t.Fatalf("ensure im config jobs schema: %v", err)
+	}
 
 	if err := devices.EnsureSchema(); err != nil {
 		t.Fatalf("ensure device schema second run: %v", err)
@@ -27,6 +35,12 @@ func TestEnsureSchemaVersionTable(t *testing.T) {
 	}
 	if err := joinTokens.EnsureSchema(); err != nil {
 		t.Fatalf("ensure join token schema second run: %v", err)
+	}
+	if err := adminSettings.EnsureSchema(); err != nil {
+		t.Fatalf("ensure admin settings schema second run: %v", err)
+	}
+	if err := imJobs.EnsureSchema(); err != nil {
+		t.Fatalf("ensure im config jobs schema second run: %v", err)
 	}
 
 	assertSchemaVersion := func(name string, want int) {
@@ -43,4 +57,6 @@ func TestEnsureSchemaVersionTable(t *testing.T) {
 	assertSchemaVersion(schemaNameDevices, 1)
 	assertSchemaVersion(schemaNameCommands, 1)
 	assertSchemaVersion(schemaNameJoinTokens, 1)
+	assertSchemaVersion(schemaNameAdminSettings, 1)
+	assertSchemaVersion(schemaNameIMConfigJobs, 1)
 }

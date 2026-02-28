@@ -2,6 +2,8 @@ package server
 
 import (
 	"database/sql"
+	"net"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -32,4 +34,22 @@ func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool, des
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("condition not met in %s: %s", timeout, desc)
+}
+
+func startTCP4HTTPServer(t *testing.T, handler http.Handler) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	httpServer := &http.Server{Handler: handler}
+	go func() {
+		_ = httpServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		_ = httpServer.Close()
+		_ = listener.Close()
+	})
+	return "http://" + listener.Addr().String()
 }

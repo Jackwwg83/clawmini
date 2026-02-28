@@ -1,13 +1,11 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -28,27 +26,8 @@ type configureIMRequest struct {
 	} `json:"credentials"`
 }
 
-type configureIMResponse struct {
-	ID        string            `json:"id"`
-	DeviceID  string            `json:"deviceId"`
-	Platform  string            `json:"platform"`
-	Plugin    string            `json:"plugin,omitempty"`
-	Status    string            `json:"status"`
-	Error     string            `json:"error,omitempty"`
-	Steps     []configureIMStep `json:"steps"`
-	CreatedAt int64             `json:"createdAt"`
-	UpdatedAt int64             `json:"updatedAt"`
-}
-
-type configureIMStep struct {
-	Key            string                `json:"key"`
-	Title          string                `json:"title"`
-	DisplayCommand string                `json:"displayCommand"`
-	Status         string                `json:"status"`
-	CommandID      string                `json:"commandId,omitempty"`
-	Error          string                `json:"error,omitempty"`
-	Record         *server.CommandRecord `json:"record,omitempty"`
-}
+type configureIMResponse = server.IMConfigJob
+type configureIMStep = server.IMConfigStep
 
 type configureCommand struct {
 	Key            string
@@ -60,82 +39,37 @@ type configureCommand struct {
 }
 
 type configureIMJobStore struct {
-	mu   sync.RWMutex
-	jobs map[string]*configureIMResponse
+	store *server.IMConfigJobStore
 }
 
-func newConfigureIMJobStore() *configureIMJobStore {
-	return &configureIMJobStore{jobs: make(map[string]*configureIMResponse)}
+func newConfigureIMJobStore(db *sql.DB) *configureIMJobStore {
+	return &configureIMJobStore{store: server.NewIMConfigJobStore(db)}
+}
+
+func (s *configureIMJobStore) EnsureSchema() error {
+	return s.store.EnsureSchema()
+}
+
+func (s *configureIMJobStore) Start() {
+	s.store.Start()
+}
+
+func (s *configureIMJobStore) Stop() {
+	s.store.Stop()
 }
 
 func (s *configureIMJobStore) create(deviceID, platform string, steps []configureIMStep) (configureIMResponse, error) {
-	id, err := randomID(16)
-	if err != nil {
-		return configureIMResponse{}, err
-	}
-	now := time.Now().Unix()
-	job := &configureIMResponse{
-		ID:        id,
-		DeviceID:  deviceID,
-		Platform:  platform,
-		Status:    "queued",
-		Steps:     append([]configureIMStep(nil), steps...),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	s.mu.Lock()
-	s.jobs[id] = job
-	s.mu.Unlock()
-
-	return copyConfigureIMResponse(*job), nil
+	return s.store.Create(deviceID, platform, steps)
 }
 
 func (s *configureIMJobStore) get(deviceID, id string) (configureIMResponse, error) {
-	s.mu.RLock()
-	job, ok := s.jobs[id]
-	s.mu.RUnlock()
-	if !ok || job.DeviceID != deviceID {
-		return configureIMResponse{}, server.ErrNotFound
-	}
-	return copyConfigureIMResponse(*job), nil
+	return s.store.Get(deviceID, id)
 }
 
 func (s *configureIMJobStore) update(id string, mutate func(job *configureIMResponse)) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	job, ok := s.jobs[id]
-	if !ok {
-		return server.ErrNotFound
-	}
-	mutate(job)
-	job.UpdatedAt = time.Now().Unix()
-	return nil
-}
-
-func copyConfigureIMResponse(in configureIMResponse) configureIMResponse {
-	out := in
-	out.Steps = make([]configureIMStep, len(in.Steps))
-	for i := range in.Steps {
-		out.Steps[i] = in.Steps[i]
-		if in.Steps[i].Record != nil {
-			rec := *in.Steps[i].Record
-			out.Steps[i].Record = &rec
-		}
-	}
-	return out
-}
-
-func randomID(size int) (string, error) {
-	if size <= 0 {
-		return "", errors.New("invalid id size")
-	}
-	buf := make([]byte, size)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
+	return s.store.Update(id, func(job *server.IMConfigJob) {
+		mutate((*configureIMResponse)(job))
+	})
 }
 
 func normalizeIMPlatform(value string) string {

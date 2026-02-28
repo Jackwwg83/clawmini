@@ -38,6 +38,12 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 	}
 	auth := &server.TokenAuth{AdminToken: "test-admin-token", DeviceToken: "test-device-token"}
 	hub := server.NewHub(devices, commands, joinTokens, auth)
+	imConfigs := newConfigureIMJobStore(db)
+	if err := imConfigs.EnsureSchema(); err != nil {
+		t.Fatalf("ensure im config jobs schema: %v", err)
+	}
+	imConfigs.Start()
+	t.Cleanup(imConfigs.Stop)
 
 	app := &serverApp{
 		auth:       auth,
@@ -45,7 +51,7 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 		commands:   commands,
 		joinTokens: joinTokens,
 		hub:        hub,
-		imConfigs:  newConfigureIMJobStore(),
+		imConfigs:  imConfigs,
 	}
 
 	r := chi.NewRouter()

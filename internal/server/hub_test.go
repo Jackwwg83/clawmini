@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -30,10 +29,9 @@ func testHubServer(t *testing.T) (*Hub, *CommandStore, string, string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleDeviceWS)
 	mux.HandleFunc("/api/ws", hub.HandleBrowserWS)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	baseHTTPURL := startTCP4HTTPServer(t, mux)
 
-	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+	base := "ws" + strings.TrimPrefix(baseHTTPURL, "http")
 	return hub, commands, base + "/ws", base + "/api/ws"
 }
 
@@ -260,9 +258,8 @@ func TestHubAcceptsJoinTokenOnce(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleDeviceWS)
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	deviceWSURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	baseHTTPURL := startTCP4HTTPServer(t, mux)
+	deviceWSURL := "ws" + strings.TrimPrefix(baseHTTPURL, "http") + "/ws"
 
 	token, err := joinTokens.CreateToken("一次性令牌", time.Hour)
 	if err != nil {
@@ -306,5 +303,86 @@ func TestHubAcceptsJoinTokenOnce(t *testing.T) {
 	_, _, err = reuseConn.ReadMessage()
 	if err == nil {
 		t.Fatalf("expected connection close for reused join token")
+	}
+}
+
+func TestHubRejectsBrowserMismatchedOrigin(t *testing.T) {
+	_, _, _, browserWSURL := testHubServer(t)
+
+	headers := http.Header{}
+	headers.Set("Origin", "https://evil.example.com")
+	conn, resp, err := websocket.DefaultDialer.Dial(browserWSURL, headers)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatalf("expected websocket dial to fail for mismatched origin")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		got := 0
+		if resp != nil {
+			got = resp.StatusCode
+		}
+		t.Fatalf("expected 403 for mismatched origin, got %d", got)
+	}
+}
+
+func TestHubAllowedOriginsList(t *testing.T) {
+	hub, _, _, browserWSURL := testHubServer(t)
+	if err := hub.SetAllowedOrigins([]string{"https://console.example.com"}); err != nil {
+		t.Fatalf("set allowed origins: %v", err)
+	}
+
+	headers := http.Header{}
+	headers.Set("Origin", "https://console.example.com")
+	conn, _, err := websocket.DefaultDialer.Dial(browserWSURL, headers)
+	if err != nil {
+		t.Fatalf("dial browser ws: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]interface{}{
+		"type": "auth",
+		"data": map[string]string{
+			"token": "admin-token",
+		},
+	}); err != nil {
+		t.Fatalf("send browser auth: %v", err)
+	}
+
+	var msg map[string]interface{}
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read browser snapshot: %v", err)
+	}
+	if msg["event"] != "snapshot" {
+		t.Fatalf("expected snapshot event, got %#v", msg["event"])
+	}
+}
+
+func TestHubAllowedOriginsStillAllowsDeviceWithoutOrigin(t *testing.T) {
+	hub, _, deviceWSURL, _ := testHubServer(t)
+	if err := hub.SetAllowedOrigins([]string{"https://console.example.com"}); err != nil {
+		t.Fatalf("set allowed origins: %v", err)
+	}
+
+	conn := registerDevice(t, deviceWSURL, protocol.RegisterPayload{
+		DeviceID:      "dev-originless",
+		Hostname:      "host-originless",
+		Token:         "device-token",
+		OS:            "linux",
+		Arch:          "amd64",
+		ClientVersion: "0.1.0",
+	})
+	defer conn.Close()
+
+	waitForCondition(t, time.Second, func() bool {
+		return hub.IsDeviceOnline("dev-originless")
+	}, "device should connect without origin header")
+}
+
+func TestHubSetAllowedOriginsRejectsInvalidOrigin(t *testing.T) {
+	hub, _, _, _ := testHubServer(t)
+	if err := hub.SetAllowedOrigins([]string{"not-a-url"}); err == nil {
+		t.Fatalf("expected invalid origin to fail")
 	}
 }

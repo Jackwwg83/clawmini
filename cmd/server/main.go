@@ -41,12 +41,21 @@ func main() {
 	addr := flag.String("addr", ":18790", "server listen address")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file")
+	configPath := flag.String("config", "./clawmini.json", "path to JSON config file")
+	adminTokenFlag := flag.String("admin-token", "", "admin token override (used when CLAWMINI_ADMIN_TOKEN is unset)")
+	allowedOriginsFlag := flag.String("allowed-origins", "", "comma-separated allowed websocket origins; default is same-origin only")
 	flag.Parse()
 
-	auth, err := server.NewTokenAuthFromEnv()
+	cfg, err := loadFileConfig(*configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	deviceToken := strings.TrimSpace(os.Getenv("CLAWMINI_DEVICE_TOKEN"))
+	if deviceToken == "" {
+		log.Fatal("CLAWMINI_DEVICE_TOKEN is required")
+	}
+
 	dbPath := os.Getenv("CLAWMINI_DB_PATH")
 	if dbPath == "" {
 		dbPath = "./clawmini.db"
@@ -57,6 +66,29 @@ func main() {
 		log.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
+
+	adminTokenStore := server.NewAdminTokenStore(db)
+	if err := adminTokenStore.EnsureSchema(); err != nil {
+		log.Fatalf("ensure admin settings schema: %v", err)
+	}
+
+	adminToken, generatedAdminToken, err := resolveAdminToken(
+		adminTokenStore,
+		os.Getenv("CLAWMINI_ADMIN_TOKEN"),
+		*adminTokenFlag,
+		cfg.adminToken(),
+	)
+	if err != nil {
+		log.Fatalf("resolve admin token: %v", err)
+	}
+	if generatedAdminToken {
+		fmt.Printf("Generated admin token (saved to SQLite): %s\n", adminToken)
+	}
+
+	auth := &server.TokenAuth{
+		AdminToken:  adminToken,
+		DeviceToken: deviceToken,
+	}
 
 	deviceStore := server.NewDeviceStore(db)
 	if err := deviceStore.EnsureSchema(); err != nil {
@@ -74,15 +106,26 @@ func main() {
 	}
 
 	hub := server.NewHub(deviceStore, commandStore, joinTokenStore, auth)
+	if err := hub.SetAllowedOrigins(splitCSV(*allowedOriginsFlag)); err != nil {
+		log.Fatalf("configure websocket allowed origins: %v", err)
+	}
 	hub.Start()
 	defer hub.Stop()
+
+	imConfigStore := newConfigureIMJobStore(db)
+	if err := imConfigStore.EnsureSchema(); err != nil {
+		log.Fatalf("ensure im config jobs schema: %v", err)
+	}
+	imConfigStore.Start()
+	defer imConfigStore.Stop()
+
 	app := &serverApp{
 		auth:       auth,
 		devices:    deviceStore,
 		commands:   commandStore,
 		joinTokens: joinTokenStore,
 		hub:        hub,
-		imConfigs:  newConfigureIMJobStore(),
+		imConfigs:  imConfigStore,
 	}
 	loginLimiter := newLoginRateLimiter(5, time.Minute)
 
@@ -168,6 +211,8 @@ func main() {
 			log.Printf("force close failed: %v", closeErr)
 		}
 	}
+	app.imConfigs.Stop()
+	hub.Stop()
 
 	if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)

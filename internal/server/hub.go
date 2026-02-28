@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -72,6 +73,9 @@ type Hub struct {
 	deviceWS map[string]*deviceSession
 	browsers map[*browserSession]struct{}
 
+	originMu       sync.RWMutex
+	allowedOrigins map[string]struct{}
+
 	janitorMu      sync.Mutex
 	janitorRunning bool
 	janitorStopCh  chan struct{}
@@ -79,7 +83,7 @@ type Hub struct {
 }
 
 func NewHub(devices *DeviceStore, commands *CommandStore, joinTokens *JoinTokenStore, auth *TokenAuth) *Hub {
-	return &Hub{
+	hub := &Hub{
 		devices:    devices,
 		commands:   commands,
 		joinTokens: joinTokens,
@@ -87,11 +91,32 @@ func NewHub(devices *DeviceStore, commands *CommandStore, joinTokens *JoinTokenS
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
-			CheckOrigin:     validateWSOrigin,
 		},
 		deviceWS: make(map[string]*deviceSession),
 		browsers: make(map[*browserSession]struct{}),
 	}
+	hub.upgrader.CheckOrigin = hub.checkWSOrigin
+	return hub
+}
+
+func (h *Hub) SetAllowedOrigins(origins []string) error {
+	normalized := make(map[string]struct{})
+	for _, origin := range origins {
+		norm, err := normalizeAllowedOrigin(origin)
+		if err != nil {
+			return fmt.Errorf("invalid allowed origin %q: %w", origin, err)
+		}
+		normalized[norm] = struct{}{}
+	}
+
+	h.originMu.Lock()
+	if len(normalized) == 0 {
+		h.allowedOrigins = nil
+	} else {
+		h.allowedOrigins = normalized
+	}
+	h.originMu.Unlock()
+	return nil
 }
 
 func (h *Hub) Start() {
@@ -315,7 +340,7 @@ func (h *Hub) authenticateBrowser(conn *websocket.Conn) error {
 	return nil
 }
 
-func validateWSOrigin(r *http.Request) bool {
+func (h *Hub) checkWSOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
 		return r.URL.Path == "/ws"
@@ -325,7 +350,35 @@ func validateWSOrigin(r *http.Request) bool {
 	if err != nil || originURL.Host == "" {
 		return false
 	}
-	return strings.EqualFold(originURL.Host, r.Host)
+
+	h.originMu.RLock()
+	allowed := h.allowedOrigins
+	h.originMu.RUnlock()
+	if len(allowed) > 0 {
+		norm, err := normalizeAllowedOrigin(origin)
+		if err != nil {
+			return false
+		}
+		_, ok := allowed[norm]
+		return ok
+	}
+
+	return strings.EqualFold(originURL.Host, strings.TrimSpace(r.Host))
+}
+
+func normalizeAllowedOrigin(origin string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Host == "" {
+		return "", errors.New("host is required")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return "", errors.New("scheme must be http or https")
+	}
+	return scheme + "://" + strings.ToLower(parsed.Host), nil
 }
 
 func (h *Hub) handleDeviceMessage(sess *deviceSession, data []byte) {

@@ -1,6 +1,9 @@
 package openclaw
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // OfflineInstallCommand returns the install command for a given server base URL.
 func OfflineInstallCommand(serverBaseURL string) string {
@@ -10,7 +13,14 @@ func OfflineInstallCommand(serverBaseURL string) string {
 const officialInstallScript = "DYNAMIC"
 
 const (
+	legacyResolveUserScript = `u=""; [ -n "$SUDO_USER" ] && u="$SUDO_USER"; if [ -z "$u" ]; then for d in /home/*/.openclaw; do [ -d "$d" ] && u="$(stat -c '%U' "$d")" && break; done; fi; [ -z "$u" ] && u="$(id -un)"; echo "$u"`
+	legacyLingerCheckCmd    = `u=$(` + legacyResolveUserScript + `); loginctl show-user "$u" --property=Linger --value`
+	legacyLingerEnableCmd   = `u=$(` + legacyResolveUserScript + `); loginctl enable-linger "$u"`
+)
 
+var (
+	lingerShowUserRegex = regexp.MustCompile(`^loginctl show-user "[a-zA-Z0-9._-]+" --property=Linger --value$`)
+	lingerEnableRegex   = regexp.MustCompile(`^loginctl enable-linger "[a-zA-Z0-9._-]+"$`)
 )
 
 // AllowedCommands defines the whitelist of openclaw subcommands the client will execute
@@ -93,22 +103,23 @@ func ValidateCommand(cmd string, args []string) bool {
 }
 
 // isLingerCommand checks if a shell command is a linger check or enable operation.
-// Rejects commands containing shell injection (semicolons, pipes, etc. after loginctl).
+// Explicit username form is strictly validated, and known legacy fallback formats are kept.
 func isLingerCommand(cmd string) bool {
-	// Must end with the loginctl command - no trailing commands allowed
-	if strings.Contains(cmd, ";") || strings.Contains(cmd, "|") || strings.Contains(cmd, "&&") {
-		// Check if injection is AFTER the loginctl part
-		// Find last loginctl occurrence
-		idx := strings.LastIndex(cmd, "loginctl")
-		if idx >= 0 {
-			after := cmd[idx:]
-			if strings.ContainsAny(after, ";|&`") {
-				return false
-			}
-		}
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return false
 	}
-	return (strings.Contains(cmd, "loginctl show-user") && strings.Contains(cmd, "--property=Linger")) ||
-		(strings.Contains(cmd, "loginctl enable-linger") && !strings.ContainsAny(cmd[strings.Index(cmd, "loginctl enable-linger")+len("loginctl enable-linger"):], ";|&`"))
+
+	if cmd == legacyLingerCheckCmd || cmd == legacyLingerEnableCmd {
+		return true
+	}
+	// Keep compatibility with older server builds that used id -un directly.
+	if cmd == `loginctl show-user "$(id -un)" --property=Linger --value` ||
+		cmd == `loginctl enable-linger "$(id -un)"` {
+		return true
+	}
+
+	return lingerShowUserRegex.MatchString(cmd) || lingerEnableRegex.MatchString(cmd)
 }
 
 // ValidateDispatchCommand validates all commands that can be pushed from server to agent.

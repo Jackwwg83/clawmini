@@ -47,6 +47,7 @@ func TestDeviceStoreCRUD(t *testing.T) {
 	hb := protocol.HeartbeatPayload{
 		DeviceID: "dev-1",
 		System: protocol.SystemInfo{
+			Username:  "ubuntu",
 			CPUUsage:  25.5,
 			MemTotal:  1024,
 			MemUsed:   256,
@@ -90,6 +91,9 @@ func TestDeviceStoreCRUD(t *testing.T) {
 	if len(snap.Status.OpenClawInfo.Channels) != 1 || snap.Status.OpenClawInfo.Channels[0].Name != "alpha" {
 		t.Fatalf("channels not persisted: %+v", snap.Status.OpenClawInfo.Channels)
 	}
+	if got := store.GetDeviceUsername("dev-1"); got != "ubuntu" {
+		t.Fatalf("expected stored username ubuntu, got %q", got)
+	}
 
 	reg.Hostname = "host-b"
 	reg.ClientVersion = "0.2.0"
@@ -115,6 +119,18 @@ func TestDeviceStoreCRUD(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].ID != "dev-1" {
 		t.Fatalf("unexpected list result: %+v", list)
+	}
+}
+
+func TestDeviceStoreGetDeviceUsernameEmptyWhenMissing(t *testing.T) {
+	db := openTestDB(t)
+	store := NewDeviceStore(db)
+	if err := store.EnsureSchema(); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	if got := store.GetDeviceUsername("missing-device"); got != "" {
+		t.Fatalf("expected empty username for missing device, got %q", got)
 	}
 }
 

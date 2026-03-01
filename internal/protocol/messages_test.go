@@ -40,6 +40,7 @@ func TestEnvelopeJSONRoundTripForAllMessageTypes(t *testing.T) {
 			payload: HeartbeatPayload{
 				DeviceID: "dev-1",
 				System: SystemInfo{
+					Username:  "ubuntu",
 					CPUUsage:  12.5,
 					MemTotal:  1024,
 					MemUsed:   256,

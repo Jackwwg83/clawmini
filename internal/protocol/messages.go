@@ -36,6 +36,7 @@ type HeartbeatPayload struct {
 }
 
 type SystemInfo struct {
+	Username  string  `json:"username"`
 	CPUUsage  float64 `json:"cpuUsage"`
 	MemTotal  uint64  `json:"memTotal"`
 	MemUsed   uint64  `json:"memUsed"`

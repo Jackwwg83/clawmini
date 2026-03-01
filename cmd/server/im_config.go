@@ -474,7 +474,8 @@ func (a *serverApp) dispatchAndWaitCommand(deviceID, command string, args []stri
 		timeout = 60
 	}
 	if requiresGatewayLinger(command, args) {
-		lingerRec, lingerErr := a.ensureLingerEnabled("", deviceID, "", "")
+		username := a.lookupDeviceUsername(deviceID)
+		lingerRec, lingerErr := a.ensureLingerEnabled("", deviceID, "", "", username)
 		if lingerErr != nil {
 			return lingerRec, lingerErr
 		}

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"os"
+	"os/user"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,6 +27,9 @@ func TestCollectorCollect_SystemInfo(t *testing.T) {
 	if hb1.DeviceID != "dev-1" {
 		t.Fatalf("device id mismatch: got %q", hb1.DeviceID)
 	}
+	if hb1.System.Username == "" {
+		t.Fatalf("username should be populated in heartbeat system info")
+	}
 	if hb1.System.CPUUsage < 0 || hb1.System.CPUUsage > 100 {
 		t.Fatalf("cpu usage out of range: %v", hb1.System.CPUUsage)
 	}
@@ -43,6 +47,20 @@ func TestCollectorCollect_SystemInfo(t *testing.T) {
 	hb2 := c.Collect(context.Background(), "dev-1")
 	if hb2.System.CPUUsage < 0 || hb2.System.CPUUsage > 100 {
 		t.Fatalf("second cpu usage out of range: %v", hb2.System.CPUUsage)
+	}
+}
+
+func TestCollectorCollect_UsesResolvedOpenClawUser(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+
+	t.Setenv("SUDO_USER", current.Username)
+
+	hb := NewCollector().Collect(context.Background(), "dev-user")
+	if hb.System.Username != current.Username {
+		t.Fatalf("expected username %q, got %q", current.Username, hb.System.Username)
 	}
 }
 

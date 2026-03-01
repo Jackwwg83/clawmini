@@ -32,6 +32,7 @@ func (c *Collector) Collect(ctx context.Context, deviceID string) protocol.Heart
 	return protocol.HeartbeatPayload{
 		DeviceID: deviceID,
 		System: protocol.SystemInfo{
+			Username:  resolvedOpenClawUsername(),
 			CPUUsage:  c.cpuUsage(),
 			MemTotal:  memTotal,
 			MemUsed:   memUsed,
@@ -41,6 +42,14 @@ func (c *Collector) Collect(ctx context.Context, deviceID string) protocol.Heart
 		},
 		OpenClaw: collectOpenClaw(ctx),
 	}
+}
+
+func resolvedOpenClawUsername() string {
+	u := resolveOpenClawUser()
+	if u == nil {
+		return ""
+	}
+	return strings.TrimSpace(u.Username)
 }
 
 func (c *Collector) cpuUsage() float64 {

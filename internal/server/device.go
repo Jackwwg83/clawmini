@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/raystone-ai/clawmini/internal/protocol"
@@ -76,7 +77,7 @@ func NewDeviceStore(db *sql.DB) *DeviceStore {
 }
 
 func (s *DeviceStore) EnsureSchema() error {
-	return ensureSchemaMigrations(s.db, schemaNameDevices, 2, map[int]string{
+	return ensureSchemaMigrations(s.db, schemaNameDevices, 3, map[int]string{
 		1: `
 CREATE TABLE IF NOT EXISTS devices (
 	id TEXT PRIMARY KEY,
@@ -109,6 +110,9 @@ CREATE TABLE IF NOT EXISTS device_status (
 		2: `
 ALTER TABLE devices ADD COLUMN has_openclaw INTEGER NOT NULL DEFAULT 0;
 `,
+		3: `
+ALTER TABLE devices ADD COLUMN username TEXT NOT NULL DEFAULT '';
+`,
 	})
 }
 
@@ -123,8 +127,8 @@ func (s *DeviceStore) UpsertDevice(reg protocol.RegisterPayload) error {
 		hasOpenClaw = 1
 	}
 	_, err := s.db.Exec(`
-INSERT INTO devices(id, hostname, os, arch, has_openclaw, openclaw_version, client_version, created_at, updated_at, last_seen_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO devices(id, hostname, os, arch, has_openclaw, openclaw_version, client_version, username, created_at, updated_at, last_seen_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	hostname=excluded.hostname,
 	os=excluded.os,
@@ -132,9 +136,10 @@ ON CONFLICT(id) DO UPDATE SET
 	has_openclaw=excluded.has_openclaw,
 	openclaw_version=excluded.openclaw_version,
 	client_version=excluded.client_version,
+	username=CASE WHEN excluded.username = '' THEN devices.username ELSE excluded.username END,
 	updated_at=excluded.updated_at,
 	last_seen_at=excluded.last_seen_at;
-`, reg.DeviceID, reg.Hostname, reg.OS, reg.Arch, hasOpenClaw, reg.OpenClawVersion, reg.ClientVersion, now, now, now)
+`, reg.DeviceID, reg.Hostname, reg.OS, reg.Arch, hasOpenClaw, reg.OpenClawVersion, reg.ClientVersion, "", now, now, now)
 	return err
 }
 
@@ -154,9 +159,10 @@ func (s *DeviceStore) UpdateHeartbeat(hb protocol.HeartbeatPayload) error {
 
 	if _, err := tx.Exec(`
 UPDATE devices
-SET updated_at=?, last_seen_at=?, has_openclaw=CASE WHEN has_openclaw = 1 THEN 1 ELSE ? END, openclaw_version=CASE WHEN ? = '' THEN openclaw_version ELSE ? END
+SET updated_at=?, last_seen_at=?, has_openclaw=CASE WHEN has_openclaw = 1 THEN 1 ELSE ? END, openclaw_version=CASE WHEN ? = '' THEN openclaw_version ELSE ? END,
+	username=CASE WHEN ? = '' THEN username ELSE ? END
 WHERE id=?;
-`, now, now, installed, hb.OpenClaw.Version, hb.OpenClaw.Version, hb.DeviceID); err != nil {
+`, now, now, installed, hb.OpenClaw.Version, hb.OpenClaw.Version, strings.TrimSpace(hb.System.Username), strings.TrimSpace(hb.System.Username), hb.DeviceID); err != nil {
 		return err
 	}
 
@@ -247,6 +253,22 @@ func (s *DeviceStore) DeleteDevice(id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *DeviceStore) GetDeviceUsername(deviceID string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return ""
+	}
+
+	var username sql.NullString
+	if err := s.db.QueryRow(`SELECT username FROM devices WHERE id = ?;`, deviceID).Scan(&username); err != nil {
+		return ""
+	}
+	if !username.Valid {
+		return ""
+	}
+	return strings.TrimSpace(username.String)
 }
 
 func scanDeviceSnapshot(scanner interface {

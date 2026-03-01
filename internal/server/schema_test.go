@@ -75,7 +75,7 @@ func TestEnsureSchemaVersionTable(t *testing.T) {
 		}
 	}
 
-	assertSchemaVersion(schemaNameDevices, 2)
+	assertSchemaVersion(schemaNameDevices, 3)
 	assertSchemaVersion(schemaNameCommands, 1)
 	assertSchemaVersion(schemaNameJoinTokens, 2)
 	assertSchemaVersion(schemaNameUsers, 1)

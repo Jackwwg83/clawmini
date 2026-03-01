@@ -496,7 +496,8 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if requiresGatewayLinger(req.Command, req.Args) {
-		if _, err := a.ensureLingerEnabled("", deviceID, "", adminIP); err != nil {
+		username := a.lookupDeviceUsername(deviceID)
+		if _, err := a.ensureLingerEnabled("", deviceID, "", adminIP, username); err != nil {
 			if isLikelyDeviceOfflineError(err) {
 				server.WriteError(w, http.StatusConflict, "device offline")
 				a.logAudit("command.exec", deviceID, err.Error(), adminIP, "failed")

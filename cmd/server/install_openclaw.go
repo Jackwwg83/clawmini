@@ -172,7 +172,8 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 	version := parseVersionFromCommandOutput(verifyRec)
 	_ = a.completeInstallStep(jobID, "verify-version", &verifyRec, "")
 
-	lingerRec, lingerErr := a.ensureLingerEnabled(jobID, deviceID, "enable-linger", adminIP)
+	username := a.lookupDeviceUsername(deviceID)
+	lingerRec, lingerErr := a.ensureLingerEnabled(jobID, deviceID, "enable-linger", adminIP, username)
 	if lingerErr != nil {
 		a.failInstallStep(jobID, "enable-linger", lingerErr.Error(), &lingerRec, lingerErr)
 		a.logAudit("openclaw.install", deviceID, lingerErr.Error(), adminIP, "failed")

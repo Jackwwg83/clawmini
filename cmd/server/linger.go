@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
+	"regexp"
 	"strings"
 
 	"github.com/raystone-ai/clawmini/internal/server"
@@ -18,10 +20,36 @@ const (
 	lingerEnableCommand = `u=$(` + resolveUserScript + `); loginctl enable-linger "$u"`
 )
 
+var lingerUsernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+func formatLingerCheckCommand(username string) string {
+	return fmt.Sprintf(`loginctl show-user "%s" --property=Linger --value`, username)
+}
+
+func formatLingerEnableCommand(username string) string {
+	return fmt.Sprintf(`loginctl enable-linger "%s"`, username)
+}
+
+func resolveLingerCommands(deviceID, username string) (string, string) {
+	username = strings.TrimSpace(username)
+	if username != "" && lingerUsernamePattern.MatchString(username) {
+		return formatLingerCheckCommand(username), formatLingerEnableCommand(username)
+	}
+
+	if username == "" {
+		log.Printf("WARNING: device %s heartbeat username is empty, falling back to runtime user detection for linger commands", strings.TrimSpace(deviceID))
+	} else {
+		log.Printf("WARNING: device %s heartbeat username %q is invalid, falling back to runtime user detection for linger commands", strings.TrimSpace(deviceID), username)
+	}
+	return lingerCheckCommand, lingerEnableCommand
+}
+
 // ensureLingerEnabled verifies user linger state and enables it when required.
 // jobID/stepKey/adminIP are accepted for call-site consistency across flows.
-func (a *serverApp) ensureLingerEnabled(jobID, deviceID, stepKey, adminIP string) (server.CommandRecord, error) {
-	lingerCheckRec, lingerCheckErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerCheckCommand}, 20)
+func (a *serverApp) ensureLingerEnabled(jobID, deviceID, stepKey, adminIP, username string) (server.CommandRecord, error) {
+	lingerCheck, lingerEnable := resolveLingerCommands(deviceID, username)
+
+	lingerCheckRec, lingerCheckErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerCheck}, 20)
 	if lingerCheckErr != nil {
 		return lingerCheckRec, fmt.Errorf("%s: %w", lingerErrorPrefix(jobID, stepKey, adminIP, "检查 linger 状态失败"), lingerCheckErr)
 	}
@@ -38,7 +66,7 @@ func (a *serverApp) ensureLingerEnabled(jobID, deviceID, stepKey, adminIP string
 		return lingerCheckRec, nil
 	}
 
-	lingerEnableRec, lingerEnableErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerEnableCommand}, 20)
+	lingerEnableRec, lingerEnableErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerEnable}, 20)
 	if lingerEnableErr != nil {
 		return lingerEnableRec, fmt.Errorf("%s: %w", lingerErrorPrefix(jobID, stepKey, adminIP, "启用 linger 失败"), lingerEnableErr)
 	}
@@ -48,6 +76,10 @@ func (a *serverApp) ensureLingerEnabled(jobID, deviceID, stepKey, adminIP string
 	}
 
 	return lingerEnableRec, nil
+}
+
+func (a *serverApp) lookupDeviceUsername(deviceID string) string {
+	return a.devices.GetDeviceUsername(deviceID)
 }
 
 func requiresGatewayLinger(command string, args []string) bool {

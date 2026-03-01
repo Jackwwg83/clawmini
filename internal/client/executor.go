@@ -49,9 +49,12 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 		command = resolved
 	}
 
-	execCmd := exec.CommandContext(ctx, command, cmd.Args...)
-	// Ensure essential env vars are set (systemd services may lack them)
-	execCmd.Env = ensureEnv(os.Environ())
+	execUser := resolveOpenClawUser()
+	execCmd, wrappedWithSudo := buildExecCommand(ctx, command, cmd.Command, cmd.Args, os.Geteuid(), execUser)
+	if !wrappedWithSudo {
+		// Ensure essential env vars are set (systemd services may lack them)
+		execCmd.Env = ensureEnv(os.Environ())
+	}
 	stdoutPipe, err := execCmd.StdoutPipe()
 	if err != nil {
 		result.ExitCode = 1
@@ -120,6 +123,38 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 
 	result.DurationMs = time.Since(start).Milliseconds()
 	return result
+}
+
+func buildExecCommand(ctx context.Context, resolvedCommand, originalCommand string, args []string, euid int, execUser *user.User) (*exec.Cmd, bool) {
+	if shouldWrapGatewayCommandWithSudo(euid, originalCommand, args, execUser) {
+		sudoArgs := make([]string, 0, 4+len(args))
+		sudoArgs = append(sudoArgs, "-u", execUser.Username, "-i", resolvedCommand)
+		sudoArgs = append(sudoArgs, args...)
+		return exec.CommandContext(ctx, "sudo", sudoArgs...), true
+	}
+	return exec.CommandContext(ctx, resolvedCommand, args...), false
+}
+
+func shouldWrapGatewayCommandWithSudo(euid int, command string, args []string, execUser *user.User) bool {
+	if euid != 0 {
+		return false
+	}
+	if command != "openclaw" {
+		return false
+	}
+	if execUser == nil || execUser.Uid == "0" || strings.TrimSpace(execUser.Username) == "" {
+		return false
+	}
+	if len(args) < 2 || args[0] != "gateway" {
+		return false
+	}
+
+	switch args[1] {
+	case "start", "restart", "install", "stop", "status":
+		return true
+	default:
+		return false
+	}
 }
 
 func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {

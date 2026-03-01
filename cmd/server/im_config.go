@@ -192,9 +192,7 @@ func initialConfigureSteps(platform string) ([]configureIMStep, error) {
 	case "dingtalk":
 		return []configureIMStep{
 			{Key: "install-plugin", Title: "安装插件", DisplayCommand: "openclaw plugins install clawdbot-dingtalk", Status: "pending"},
-			{Key: "set-client-id", Title: "配置 ClientID", DisplayCommand: "openclaw config set plugins.entries.clawdbot-dingtalk.clientId <已填写>", Status: "pending"},
-			{Key: "set-client-secret", Title: "配置 ClientSecret", DisplayCommand: "openclaw config set plugins.entries.clawdbot-dingtalk.clientSecret ******", Status: "pending"},
-			{Key: "enable-ai-card", Title: "启用 AI Card", DisplayCommand: "openclaw config set plugins.entries.clawdbot-dingtalk.aiCard.enabled true", Status: "pending"},
+			{Key: "configure-plugin", Title: "配置钉钉凭证", DisplayCommand: "写入 clientId / clientSecret / aiCard 到配置文件", Status: "pending"},
 			{Key: "restart-gateway", Title: "重启 Gateway", DisplayCommand: "openclaw gateway restart", Status: "pending"},
 		}, nil
 	case "feishu":

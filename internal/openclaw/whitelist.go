@@ -145,7 +145,14 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 			return true
 		}
 		// Allow offline install command from any ClawMini server
-		return strings.Contains(args[1], "/downloads/openclaw-offline.tar.gz") && strings.HasPrefix(args[1], "curl -fsSL ")
+		if strings.Contains(args[1], "/downloads/openclaw-offline.tar.gz") && strings.HasPrefix(args[1], "curl -fsSL ") {
+			return true
+		}
+		// Allow python3 config writer for IM setup (openclaw config set rejects plugin keys)
+		if strings.HasPrefix(args[1], `python3 -c "`) && strings.Contains(args[1], "openclaw.json") {
+			return true
+		}
+		return false
 	default:
 		return false
 	}

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"os/user"
 	"time"
 
 	"github.com/raystone-ai/clawmini/internal/openclaw"
@@ -41,6 +43,8 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 	defer cancel()
 
 	execCmd := exec.CommandContext(ctx, cmd.Command, cmd.Args...)
+	// Ensure essential env vars are set (systemd services may lack them)
+	execCmd.Env = ensureEnv(os.Environ())
 	stdoutPipe, err := execCmd.StdoutPipe()
 	if err != nil {
 		result.ExitCode = 1
@@ -142,4 +146,33 @@ func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {
 		return string(capped) + truncatedOutputMarker, nil
 	}
 	return buf.String(), nil
+}
+
+// ensureEnv makes sure HOME, USER, and PATH are set in the environment.
+// systemd services often run with minimal env, causing scripts to fail.
+func ensureEnv(env []string) []string {
+	has := make(map[string]bool)
+	for _, e := range env {
+		for i := 0; i < len(e); i++ {
+			if e[i] == '=' {
+				has[e[:i]] = true
+				break
+			}
+		}
+	}
+
+	if !has["HOME"] {
+		if u, err := user.Current(); err == nil {
+			env = append(env, "HOME="+u.HomeDir)
+		}
+	}
+	if !has["USER"] {
+		if u, err := user.Current(); err == nil {
+			env = append(env, "USER="+u.Username)
+		}
+	}
+	if !has["PATH"] {
+		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	return env
 }

@@ -182,6 +182,11 @@ func main() {
 			r.Get("/devices/{id}/install-openclaw/{jobId}", app.handleGetInstallOpenClaw)
 			r.Post("/devices/{id}/configure-im", app.handleConfigureIM)
 			r.Get("/devices/{id}/configure-im/{jobId}", app.handleGetConfigureIM)
+
+			// Model provider management
+			r.Get("/devices/{id}/model-providers", app.handleGetModelProviders)
+			r.Put("/devices/{id}/model-providers", app.handleUpsertModelProvider)
+			r.Delete("/devices/{id}/model-providers/{name}", app.handleDeleteModelProvider)
 			r.Post("/batch/exec", app.handleBatchExec)
 			r.Get("/batch/{jobId}", app.handleGetBatchJob)
 			r.Get("/audit-log", app.handleGetAuditLog)

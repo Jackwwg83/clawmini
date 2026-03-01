@@ -41,6 +41,7 @@ import { DeviceOnlineTag } from '../components/DeviceOnlineTag'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtime } from '../contexts/RealtimeContext'
 import type { ChannelInfo, CommandRecord, DeviceSnapshot } from '../types'
+import ModelProvidersCard from './ModelProvidersCard'
 import { formatDateTime, toProgress } from '../utils/format'
 
 const TERMINAL_STATUS = new Set(['completed', 'failed'])
@@ -2062,6 +2063,12 @@ export function DeviceDetailPage() {
             onConfigure={() => navigate(`/devices/${id}/im-config`)}
             openClawNotInstalled={openClawKnownNotInstalled}
           />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <ModelProvidersCard token={token} deviceId={device.id} online={device.online} />
         </Col>
       </Row>
 

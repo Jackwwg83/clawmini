@@ -36,6 +36,7 @@ type serverApp struct {
 	auditLogs  *server.AuditLogStore
 	hub        *server.Hub
 	imConfigs  *configureIMJobStore
+	publicURL  string
 }
 
 const maxJSONBodyBytes = 1 << 20
@@ -45,6 +46,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file")
 	allowedOriginsFlag := flag.String("allowed-origins", "", "comma-separated allowed websocket origins; default is same-origin only")
+	publicURLFlag := flag.String("public-url", "", "public base URL for downloads (e.g. http://13.229.214.34:18790)")
 	flag.Parse()
 
 	deviceToken := strings.TrimSpace(os.Getenv("CLAWMINI_DEVICE_TOKEN"))
@@ -142,6 +144,7 @@ func main() {
 		auditLogs:  auditLogStore,
 		hub:        hub,
 		imConfigs:  imConfigStore,
+		publicURL:  *publicURLFlag,
 	}
 	loginLimiter := newLoginRateLimiter(5, time.Minute)
 

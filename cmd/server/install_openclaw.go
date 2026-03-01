@@ -11,7 +11,7 @@ import (
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
-func installOpenClawSteps() []server.IMConfigStep {
+func (a *serverApp) installOpenClawSteps() []server.IMConfigStep {
 	return []server.IMConfigStep{
 		{
 			Key:            "check-existing",
@@ -22,7 +22,7 @@ func installOpenClawSteps() []server.IMConfigStep {
 		{
 			Key:            "run-installer",
 			Title:          "执行安装脚本",
-			DisplayCommand: openclaw.OfficialInstallScript(),
+			DisplayCommand: a.offlineInstallCommand(),
 			Status:         "pending",
 		},
 		{
@@ -57,7 +57,7 @@ func (a *serverApp) handleInstallOpenClaw(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	job, err := a.imConfigs.create(deviceID, "openclaw-install", installOpenClawSteps())
+	job, err := a.imConfigs.create(deviceID, "openclaw-install", a.installOpenClawSteps())
 	if err != nil {
 		a.writeInternalError(w, "create install-openclaw job", err)
 		a.logAudit("openclaw.install", deviceID, err.Error(), adminIP, "failed")
@@ -118,7 +118,7 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 			}
 		})
 	} else {
-		installRec, installErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", openclaw.OfficialInstallScript()}, 240)
+		installRec, installErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", a.offlineInstallCommand()}, 240)
 		if installErr != nil {
 			a.failInstallStep(jobID, "run-installer", "执行安装脚本失败", &installRec, installErr)
 			a.logAudit("openclaw.install", deviceID, installErr.Error(), adminIP, "failed")
@@ -226,4 +226,16 @@ func (a *serverApp) failInstallJob(jobID, msg string) {
 		job.Status = "failed"
 		job.Error = strings.TrimSpace(msg)
 	})
+}
+
+func (a *serverApp) offlineInstallCommand() string {
+	return openclaw.OfflineInstallCommand(a.httpBaseURL())
+}
+
+func (a *serverApp) httpBaseURL() string {
+	// Use the public-facing address
+	if a.publicURL != "" {
+		return a.publicURL
+	}
+	return "http://localhost:18790"
 }

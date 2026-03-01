@@ -157,6 +157,36 @@ func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {
 
 // ensureEnv makes sure HOME, USER, PATH, and user-systemd env vars are set.
 // systemd services often run with minimal env, causing scripts to fail.
+
+// resolveOpenClawUser returns the actual user owning the openclaw installation.
+// When running as root (systemd service), user.Current() returns root which is wrong.
+// Priority: SUDO_USER env > owner of /home/*/.openclaw > user.Current()
+func resolveOpenClawUser() *user.User {
+	u, err := user.Current()
+	if err != nil {
+		return nil
+	}
+	if u.Uid != "0" {
+		return u
+	}
+	// Running as root - find the real user
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		if lu, err := user.Lookup(sudoUser); err == nil {
+			return lu
+		}
+	}
+	// Check /home/*/.openclaw
+	matches, _ := filepath.Glob("/home/*/.openclaw")
+	for _, m := range matches {
+		dir := filepath.Dir(m) // /home/username
+		base := filepath.Base(dir)
+		if lu, err := user.Lookup(base); err == nil {
+			return lu
+		}
+	}
+	return u // fallback to root
+}
+
 func ensureEnv(env []string) []string {
 	has := make(map[string]bool)
 	for _, e := range env {
@@ -168,29 +198,22 @@ func ensureEnv(env []string) []string {
 		}
 	}
 
-	if !has["HOME"] {
-		if u, err := user.Current(); err == nil {
-			env = append(env, "HOME="+u.HomeDir)
-		}
+	u := resolveOpenClawUser()
+	if !has["HOME"] && u != nil {
+		env = append(env, "HOME="+u.HomeDir)
 	}
-	if !has["USER"] {
-		if u, err := user.Current(); err == nil {
-			env = append(env, "USER="+u.Username)
-		}
+	if !has["USER"] && u != nil {
+		env = append(env, "USER="+u.Username)
 	}
-	if !has["XDG_RUNTIME_DIR"] {
-		if u, err := user.Current(); err == nil {
-			env = append(env, fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%s", u.Uid))
-		}
+	if !has["XDG_RUNTIME_DIR"] && u != nil {
+		env = append(env, fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%s", u.Uid))
 	}
-	if !has["DBUS_SESSION_BUS_ADDRESS"] {
-		if u, err := user.Current(); err == nil {
-			env = append(env, fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%s/bus", u.Uid))
-		}
+	if !has["DBUS_SESSION_BUS_ADDRESS"] && u != nil {
+		env = append(env, fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%s/bus", u.Uid))
 	}
 	// Ensure PATH includes common install locations
 	homeDir := ""
-	if u, err := user.Current(); err == nil {
+	if u != nil {
 		homeDir = u.HomeDir
 	}
 	if !has["PATH"] {

@@ -8,9 +8,14 @@ import (
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
+// resolveUserScript finds the actual user who owns the openclaw installation.
+// When the client runs as root (systemd service), id -un returns "root" which is wrong.
+// Priority: SUDO_USER > owner of /home/*/.openclaw > fallback id -un
 const (
-	lingerCheckCommand  = `loginctl show-user "$(id -un)" --property=Linger --value`
-	lingerEnableCommand = `loginctl enable-linger "$(id -un)"`
+	resolveUserScript = `u=""; [ -n "$SUDO_USER" ] && u="$SUDO_USER"; if [ -z "$u" ]; then for d in /home/*/.openclaw; do [ -d "$d" ] && u="$(stat -c '%U' "$d")" && break; done; fi; [ -z "$u" ] && u="$(id -un)"; echo "$u"`
+
+	lingerCheckCommand  = `u=$(` + resolveUserScript + `); loginctl show-user "$u" --property=Linger --value`
+	lingerEnableCommand = `u=$(` + resolveUserScript + `); loginctl enable-linger "$u"`
 )
 
 // ensureLingerEnabled verifies user linger state and enables it when required.

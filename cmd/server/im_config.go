@@ -81,12 +81,16 @@ func isTerminalCommandStatus(status string) bool {
 }
 
 func isCommandFailed(rec server.CommandRecord) bool {
-	if rec.Status == "failed" {
+	if rec.Status != "completed" {
 		return true
 	}
 	return rec.ExitCode != nil && *rec.ExitCode != 0
 }
 
+// isPluginAlreadyInstalled checks if a "plugin already exists" error is acceptable
+func isPluginAlreadyInstalled(rec server.CommandRecord) bool {
+	return strings.Contains(rec.Stderr, "plugin already exists") || strings.Contains(rec.Stdout, "plugin already exists")
+}
 func commandErrorText(rec server.CommandRecord, fallback string) string {
 	if strings.TrimSpace(rec.Stderr) != "" {
 		return rec.Stderr
@@ -427,7 +431,7 @@ func (a *serverApp) runConfigureStep(jobID, deviceID string, step configureComma
 		return errors.New(errText)
 	}
 
-	if isCommandFailed(rec) {
+	if isCommandFailed(rec) && !isPluginAlreadyInstalled(rec) {
 		errText := commandErrorText(rec, step.Title+"执行失败")
 		_ = a.imConfigs.update(jobID, func(job *configureIMResponse) {
 			for i := range job.Steps {

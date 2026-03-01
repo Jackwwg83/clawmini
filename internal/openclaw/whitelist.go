@@ -96,7 +96,10 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 	case "which":
 		return len(args) == 1 && args[0] == "openclaw"
 	case "bash":
-		return len(args) == 2 && args[0] == "-lc" && args[1] == officialInstallScript
+		if len(args) != 2 || args[0] != "-lc" {
+			return false
+		}
+		return args[1] == officialInstallScript || args[1] == "openclaw --version"
 	default:
 		return false
 	}

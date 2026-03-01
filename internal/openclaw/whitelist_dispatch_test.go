@@ -9,6 +9,7 @@ func TestValidateDispatchCommand_AllowsOfficialInstallFlow(t *testing.T) {
 	}{
 		{cmd: "which", args: []string{"openclaw"}},
 		{cmd: "bash", args: []string{"-lc", OfficialInstallScript()}},
+		{cmd: "bash", args: []string{"-lc", "openclaw --version"}},
 		{cmd: "openclaw", args: []string{"--version"}},
 	}
 
@@ -25,6 +26,7 @@ func TestValidateDispatchCommand_RejectsNonOfficialInstallCommands(t *testing.T)
 		args []string
 	}{
 		{cmd: "bash", args: []string{"-lc", "curl example.com | bash"}},
+		{cmd: "bash", args: []string{"-lc", "openclaw --version --json"}},
 		{cmd: "bash", args: []string{"-c", OfficialInstallScript()}},
 		{cmd: "which", args: []string{"bash"}},
 		{cmd: "openclaw", args: []string{"--version", "--json"}},

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/raystone-ai/clawmini/internal/openclaw"
@@ -27,7 +28,7 @@ func installOpenClawSteps() []server.IMConfigStep {
 		{
 			Key:            "verify-version",
 			Title:          "验证安装结果",
-			DisplayCommand: "openclaw --version",
+			DisplayCommand: "bash -lc \"openclaw --version\"",
 			Status:         "pending",
 		},
 	}
@@ -130,9 +131,10 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 			return
 		}
 		_ = a.completeInstallStep(jobID, "run-installer", &installRec, "")
+		time.Sleep(2 * time.Second)
 	}
 
-	verifyRec, verifyErr := a.dispatchAndWaitCommand(deviceID, "openclaw", []string{"--version"}, 20)
+	verifyRec, verifyErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", "openclaw --version"}, 20)
 	if verifyErr != nil {
 		a.failInstallStep(jobID, "verify-version", "验证版本失败", &verifyRec, verifyErr)
 		a.logAudit("openclaw.install", deviceID, verifyErr.Error(), adminIP, "failed")

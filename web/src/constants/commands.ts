@@ -28,7 +28,7 @@ export const COMMAND_PRESETS: CommandPreset[] = [
     key: 'gateway-restart',
     label: '重启网关（gateway restart）',
     args: ['gateway', 'restart'],
-    timeout: 60,
+    timeout: 120,
   },
   {
     key: 'plugins-list',

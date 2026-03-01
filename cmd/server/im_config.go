@@ -277,7 +277,7 @@ print('OK')
 			DisplayCommand: "openclaw gateway restart",
 			Command:        "openclaw",
 			Args:           []string{"gateway", "restart"},
-			Timeout:        30,
+			Timeout:        90,
 		},
 	}
 
@@ -372,7 +372,7 @@ func (a *serverApp) runFeishuConfigure(jobID, deviceID, appID, appSecret string)
 		DisplayCommand: "openclaw gateway restart",
 		Command:        "openclaw",
 		Args:           []string{"gateway", "restart"},
-		Timeout:        30,
+		Timeout:        90,
 	}); err != nil {
 		return err
 	}

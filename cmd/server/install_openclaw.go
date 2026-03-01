@@ -136,7 +136,7 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 			}
 		})
 	} else {
-		installRec, installErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", a.offlineInstallCommand()}, 240)
+		installRec, installErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", a.offlineInstallCommand()}, 600)
 		if installErr != nil {
 			a.failInstallStep(jobID, "run-installer", "执行安装脚本失败", &installRec, installErr)
 			a.logAudit("openclaw.install", deviceID, installErr.Error(), adminIP, "failed")

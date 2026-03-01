@@ -16,6 +16,7 @@ const (
 	legacyResolveUserScript = `u=""; [ -n "$SUDO_USER" ] && u="$SUDO_USER"; if [ -z "$u" ]; then for d in /home/*/.openclaw; do [ -d "$d" ] && u="$(stat -c '%U' "$d")" && break; done; fi; [ -z "$u" ] && u="$(id -un)"; echo "$u"`
 	legacyLingerCheckCmd    = `u=$(` + legacyResolveUserScript + `); loginctl show-user "$u" --property=Linger --value`
 	legacyLingerEnableCmd   = `u=$(` + legacyResolveUserScript + `); loginctl enable-linger "$u"`
+	publishBinaryCmd        = `src=""; for d in /root/.openclaw/bin/openclaw /home/*/.openclaw/bin/openclaw; do [ -x "$d" ] && src="$d" && break; done; if [ -n "$src" ]; then if [ ! -f /usr/local/bin/openclaw ] || ! cmp -s "$src" /usr/local/bin/openclaw; then cp "$src" /usr/local/bin/openclaw; fi && chmod +x /usr/local/bin/openclaw; fi`
 )
 
 var (
@@ -141,6 +142,9 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 		if args[1] == "openclaw --version" || args[1] == "$HOME/.openclaw/bin/openclaw --version" {
 			return true
 		}
+		if args[1] == publishBinaryCmd {
+			return true
+		}
 		if isLingerCommand(args[1]) {
 			return true
 		}
@@ -149,6 +153,12 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 	default:
 		return false
 	}
+}
+
+// PublishBinaryCommand returns the shell command used by install flow to publish
+// openclaw into a shared system path when needed.
+func PublishBinaryCommand() string {
+	return publishBinaryCmd
 }
 
 func OfficialInstallScript() string {

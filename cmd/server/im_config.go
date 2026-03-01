@@ -251,27 +251,24 @@ func (a *serverApp) runDingTalkConfigure(jobID, deviceID, clientID, clientSecret
 			Timeout:        600,
 		},
 		{
-			Key:            "set-client-id",
-			Title:          "配置 ClientID",
-			DisplayCommand: "openclaw config set plugins.entries.clawdbot-dingtalk.clientId <已填写>",
-			Command:        "openclaw",
-			Args:           []string{"config", "set", "plugins.entries.clawdbot-dingtalk.clientId", clientID},
-			Timeout:        15,
-		},
-		{
-			Key:            "set-client-secret",
-			Title:          "配置 ClientSecret",
-			DisplayCommand: "openclaw config set plugins.entries.clawdbot-dingtalk.clientSecret ******",
-			Command:        "openclaw",
-			Args:           []string{"config", "set", "plugins.entries.clawdbot-dingtalk.clientSecret", clientSecret},
-			Timeout:        15,
-		},
-		{
-			Key:            "enable-ai-card",
-			Title:          "启用 AI Card",
-			DisplayCommand: "openclaw config set plugins.entries.clawdbot-dingtalk.aiCard.enabled true",
-			Command:        "openclaw",
-			Args:           []string{"config", "set", "plugins.entries.clawdbot-dingtalk.aiCard.enabled", "true"},
+			Key:            "configure-plugin",
+			Title:          "配置钉钉凭证",
+			DisplayCommand: "写入 clientId / clientSecret / aiCard 到 openclaw.json",
+			Command:        "bash",
+			Args:           []string{"-lc", `python3 -c "
+import json, sys
+p = '/root/.openclaw/openclaw.json'
+try:
+    with open(p) as f: c = json.load(f)
+except: c = {}
+e = c.setdefault('plugins',{}).setdefault('entries',{}).setdefault('clawdbot-dingtalk',{})
+e['enabled'] = True
+e['clientId'] = '` + clientID + `'
+e['clientSecret'] = '` + clientSecret + `'
+e['aiCard'] = {'enabled': True}
+with open(p,'w') as f: json.dump(c, f, indent=2)
+print('OK')
+"`},
 			Timeout:        15,
 		},
 		{

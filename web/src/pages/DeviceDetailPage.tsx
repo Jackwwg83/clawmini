@@ -48,6 +48,7 @@ const COMMAND_POLL_INTERVAL_MS = 1200
 const GATEWAY_STATUS_POLL_INTERVAL_MS = 15000
 const LOG_TAIL_INTERVAL_MS = 6000
 const INSTALL_JOB_POLL_INTERVAL_MS = 1200
+const OPENCLAW_NOT_INSTALLED_MESSAGE = 'OpenClaw 未安装'
 
 type GatewayAction = 'start' | 'stop' | 'restart'
 type DoctorCheckStatus = 'success' | 'warning' | 'error'
@@ -64,12 +65,14 @@ interface GatewayControlCardProps {
   device: DeviceSnapshot
   onRunCommand: RunDeviceCommand
   onRefreshDevice: () => Promise<void>
+  openClawNotInstalled: boolean
 }
 
 interface OpenClawUpdateCardProps {
   device: DeviceSnapshot
   onRunCommand: RunDeviceCommand
   onRefreshDevice: () => Promise<void>
+  openClawNotInstalled: boolean
 }
 
 interface OpenClawInstallCardProps {
@@ -91,6 +94,7 @@ interface ChannelsStatusCardProps {
   device: DeviceSnapshot
   onRunCommand: RunDeviceCommand
   onConfigure: () => void
+  openClawNotInstalled: boolean
 }
 
 interface LogViewerCardProps {
@@ -116,6 +120,60 @@ function getErrorMessage(err: unknown, fallback: string): string {
     return err.message
   }
   return fallback
+}
+
+function isOpenClawNotInstalledText(text?: string): boolean {
+  const normalized = toLowerText(text)
+  if (!normalized) {
+    return false
+  }
+
+  if (normalized.includes('executable file not found')) {
+    return true
+  }
+
+  if (normalized.includes('not found in $path') || normalized.includes('not found in \\$path')) {
+    return true
+  }
+
+  if (normalized.includes('openclaw') && normalized.includes('command not found')) {
+    return true
+  }
+
+  return false
+}
+
+function isOpenClawNotInstalledRecord(record?: CommandRecord | null): boolean {
+  if (!record) {
+    return false
+  }
+  return isOpenClawNotInstalledText(record.stderr) || isOpenClawNotInstalledText(record.stdout)
+}
+
+function isOpenClawNotInstalledError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false
+  }
+  return isOpenClawNotInstalledText(err.message)
+}
+
+function commandErrorMessage(record: CommandRecord, fallback: string): string {
+  if (isOpenClawNotInstalledRecord(record)) {
+    return OPENCLAW_NOT_INSTALLED_MESSAGE
+  }
+  return (record.stderr || record.stdout || fallback).trim() || fallback
+}
+
+function friendlyErrorMessage(err: unknown, fallback: string): string {
+  if (isOpenClawNotInstalledError(err)) {
+    return OPENCLAW_NOT_INSTALLED_MESSAGE
+  }
+  return getErrorMessage(err, fallback)
+}
+
+function hasOpenClawInstalled(device: DeviceSnapshot): boolean {
+  const version = (device.status?.openclaw.version || device.openclawVersion || '').trim()
+  return device.hasOpenClaw || Boolean(version)
 }
 
 function formatBytesToGb(value?: number): string {
@@ -706,6 +764,7 @@ function GatewayControlCard({
   device,
   onRunCommand,
   onRefreshDevice,
+  openClawNotInstalled,
 }: GatewayControlCardProps) {
   const [loadingAction, setLoadingAction] = useState<GatewayAction | null>(null)
   const [lastResult, setLastResult] = useState<CommandRecord | null>(null)
@@ -723,7 +782,12 @@ function GatewayControlCard({
 
   const refreshGatewayStatus = useCallback(
     async (showError: boolean, force = false) => {
-      if (!device.online || (!force && loadingAction !== null) || statusInFlightRef.current) {
+      if (
+        !device.online ||
+        openClawNotInstalled ||
+        (!force && loadingAction !== null) ||
+        statusInFlightRef.current
+      ) {
         return
       }
 
@@ -739,22 +803,22 @@ function GatewayControlCard({
         }
         setStatusUpdatedAt(record.updatedAt)
         if (isCommandFailed(record) && showError) {
-          message.error(record.stderr || '获取网关状态失败')
+          message.error(commandErrorMessage(record, '获取网关状态失败'))
         }
       } catch (err) {
         if (showError) {
-          message.error(getErrorMessage(err, '获取网关状态失败'))
+          message.error(friendlyErrorMessage(err, '获取网关状态失败'))
         }
       } finally {
         statusInFlightRef.current = false
         setStatusLoading(false)
       }
     },
-    [device.online, loadingAction, onRunCommand],
+    [device.online, loadingAction, onRunCommand, openClawNotInstalled],
   )
 
   useEffect(() => {
-    if (!device.online) {
+    if (!device.online || openClawNotInstalled) {
       return
     }
 
@@ -780,7 +844,7 @@ function GatewayControlCard({
         window.clearTimeout(timer)
       }
     }
-  }, [device.id, device.online, refreshGatewayStatus])
+  }, [device.id, device.online, openClawNotInstalled, refreshGatewayStatus])
 
   const effectiveStatus = (statusText || device.status?.openclaw.gatewayStatus || '').trim()
   const statusMeta = gatewayStatusMeta(effectiveStatus)
@@ -788,13 +852,18 @@ function GatewayControlCard({
   const isBusy = loadingAction !== null
 
   const runAction = async (action: GatewayAction) => {
+    if (openClawNotInstalled) {
+      message.warning(OPENCLAW_NOT_INSTALLED_MESSAGE)
+      return
+    }
+
     setLoadingAction(action)
     try {
       const record = await onRunCommand(['gateway', action], 30)
       setLastResult(record)
 
       if (isCommandFailed(record)) {
-        message.error(record.stderr || `${action} 执行失败`)
+        message.error(commandErrorMessage(record, `${action} 执行失败`))
       } else {
         message.success(`网关${action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'}完成`)
       }
@@ -802,7 +871,7 @@ function GatewayControlCard({
       await onRefreshDevice()
       await refreshGatewayStatus(false, true)
     } catch (err) {
-      message.error(getErrorMessage(err, '网关操作失败'))
+      message.error(friendlyErrorMessage(err, '网关操作失败'))
     } finally {
       setLoadingAction(null)
     }
@@ -818,7 +887,7 @@ function GatewayControlCard({
             size="small"
             icon={<ReloadOutlined />}
             loading={statusLoading}
-            disabled={isOffline || isBusy}
+            disabled={isOffline || isBusy || openClawNotInstalled}
             onClick={() => void refreshGatewayStatus(true)}
           >
             刷新状态
@@ -834,7 +903,7 @@ function GatewayControlCard({
             type="primary"
             icon={<PlayCircleOutlined />}
             loading={loadingAction === 'start'}
-            disabled={isOffline || isBusy}
+            disabled={isOffline || isBusy || openClawNotInstalled}
             onClick={() => void runAction('start')}
           >
             启动
@@ -843,7 +912,7 @@ function GatewayControlCard({
             icon={<PoweroffOutlined />}
             danger
             loading={loadingAction === 'stop'}
-            disabled={isOffline || isBusy}
+            disabled={isOffline || isBusy || openClawNotInstalled}
             onClick={() => void runAction('stop')}
           >
             停止
@@ -851,13 +920,14 @@ function GatewayControlCard({
           <Button
             icon={<ReloadOutlined />}
             loading={loadingAction === 'restart'}
-            disabled={isOffline || isBusy}
+            disabled={isOffline || isBusy || openClawNotInstalled}
             onClick={() => void runAction('restart')}
           >
             重启
           </Button>
         </Space>
 
+        {openClawNotInstalled ? <Alert type="warning" showIcon message="OpenClaw 未安装，请先安装 OpenClaw" /> : null}
         {isOffline ? <Alert type="warning" showIcon message="设备离线，无法执行网关操作" /> : null}
 
         {lastResult ? (
@@ -869,8 +939,12 @@ function GatewayControlCard({
                 {formatDateTime(lastResult.updatedAt)}
               </Typography.Text>
             </Space>
-            {lastResult.stderr ? (
-              <Alert type="error" showIcon message={lastResult.stderr} />
+            {isCommandFailed(lastResult) ? (
+              <Alert
+                type={isOpenClawNotInstalledRecord(lastResult) ? 'warning' : 'error'}
+                showIcon
+                message={commandErrorMessage(lastResult, '命令执行失败')}
+              />
             ) : null}
           </Space>
         ) : null}
@@ -883,6 +957,7 @@ function OpenClawUpdateCard({
   device,
   onRunCommand,
   onRefreshDevice,
+  openClawNotInstalled,
 }: OpenClawUpdateCardProps) {
   const [checkingStatus, setCheckingStatus] = useState(false)
   const [updating, setUpdating] = useState(false)
@@ -911,7 +986,7 @@ function OpenClawUpdateCard({
 
   const checkUpdateStatus = useCallback(
     async (showSuccessMessage: boolean) => {
-      if (!device.online || updating) {
+      if (!device.online || openClawNotInstalled || updating) {
         return
       }
 
@@ -925,42 +1000,47 @@ function OpenClawUpdateCard({
         setStatusInfo(parseUpdateStatus(parsedOutput, device.status?.openclaw.updateAvailable))
 
         if (isCommandFailed(record)) {
-          throw new Error(record.stderr || '检查更新失败')
+          throw new Error(commandErrorMessage(record, '检查更新失败'))
         }
         if (showSuccessMessage) {
           message.success('更新状态已刷新')
         }
       } catch (err) {
-        message.error(getErrorMessage(err, '检查更新失败'))
+        message.error(friendlyErrorMessage(err, '检查更新失败'))
       } finally {
         setCheckingStatus(false)
       }
     },
-    [device.online, device.status?.openclaw.updateAvailable, onRunCommand, updating],
+    [device.online, device.status?.openclaw.updateAvailable, onRunCommand, openClawNotInstalled, updating],
   )
 
   useEffect(() => {
-    if (!device.online) {
+    if (!device.online || openClawNotInstalled) {
       return
     }
     void checkUpdateStatus(false)
-  }, [checkUpdateStatus, device.id, device.online])
+  }, [checkUpdateStatus, device.id, device.online, openClawNotInstalled])
 
   const handleUpdate = async () => {
+    if (openClawNotInstalled) {
+      message.warning(OPENCLAW_NOT_INSTALLED_MESSAGE)
+      return
+    }
+
     setUpdating(true)
     try {
       const record = await onRunCommand(['update', '--json'], 120)
       setUpdateResult(record)
 
       if (isCommandFailed(record)) {
-        throw new Error(record.stderr || '升级失败')
+        throw new Error(commandErrorMessage(record, '升级失败'))
       }
       message.success('升级命令执行完成')
 
       await onRefreshDevice()
       await checkUpdateStatus(false)
     } catch (err) {
-      message.error(getErrorMessage(err, '升级执行失败'))
+      message.error(friendlyErrorMessage(err, '升级执行失败'))
     } finally {
       setUpdating(false)
     }
@@ -979,7 +1059,7 @@ function OpenClawUpdateCard({
           <Button
             icon={<ReloadOutlined />}
             loading={checkingStatus}
-            disabled={!device.online || updating}
+            disabled={!device.online || openClawNotInstalled || updating}
             onClick={() => void checkUpdateStatus(true)}
           >
             检查更新
@@ -987,7 +1067,7 @@ function OpenClawUpdateCard({
           <Button
             type="primary"
             loading={updating}
-            disabled={!device.online || checkingStatus || !hasUpdate}
+            disabled={!device.online || openClawNotInstalled || checkingStatus || !hasUpdate}
             onClick={() => void handleUpdate()}
           >
             Update Now
@@ -1009,6 +1089,7 @@ function OpenClawUpdateCard({
         <Typography.Text type="secondary">{statusInfo.detail || (hasUpdate ? '有可用更新' : '已是最新')}</Typography.Text>
 
         {!device.online ? <Alert type="warning" showIcon message="设备离线，无法执行升级" /> : null}
+        {openClawNotInstalled ? <Alert type="warning" showIcon message="OpenClaw 未安装，请先安装 OpenClaw" /> : null}
 
         {updating ? (
           <Space direction="vertical" style={{ width: '100%' }}>
@@ -1358,7 +1439,12 @@ function SystemResourcesCard({ device }: SystemResourcesCardProps) {
   )
 }
 
-function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatusCardProps) {
+function ChannelsStatusCard({
+  device,
+  onRunCommand,
+  onConfigure,
+  openClawNotInstalled,
+}: ChannelsStatusCardProps) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<CommandRecord | null>(null)
   const [rawOutput, setRawOutput] = useState('')
@@ -1379,7 +1465,7 @@ function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatu
 
   const refreshChannelsStatus = useCallback(
     async (showSuccessMessage: boolean) => {
-      if (!device.online) {
+      if (!device.online || openClawNotInstalled) {
         return
       }
       setLoading(true)
@@ -1389,7 +1475,12 @@ function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatu
 
         const output = (record.stdout || record.stderr || '').trim()
         const parsedChannels = parseChannelsOutput(output)
-        if (parsedChannels.length > 0) {
+        const commandMissing = isOpenClawNotInstalledRecord(record)
+
+        if (commandMissing) {
+          setChannels([])
+          setRawOutput('')
+        } else if (parsedChannels.length > 0) {
           setChannels(parsedChannels)
           setRawOutput('')
         } else {
@@ -1398,25 +1489,25 @@ function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatu
         }
 
         if (isCommandFailed(record)) {
-          message.error(record.stderr || '读取 IM 通道状态失败')
+          message.error(commandErrorMessage(record, '读取 IM 通道状态失败'))
         } else if (showSuccessMessage) {
           message.success('IM 通道状态已刷新')
         }
       } catch (err) {
-        message.error(getErrorMessage(err, '读取 IM 通道状态失败'))
+        message.error(friendlyErrorMessage(err, '读取 IM 通道状态失败'))
       } finally {
         setLoading(false)
       }
     },
-    [device.online, device.status?.openclaw.channels, onRunCommand],
+    [device.online, device.status?.openclaw.channels, onRunCommand, openClawNotInstalled],
   )
 
   useEffect(() => {
-    if (!device.online) {
+    if (!device.online || openClawNotInstalled) {
       return
     }
     void refreshChannelsStatus(false)
-  }, [device.id, device.online, refreshChannelsStatus])
+  }, [device.id, device.online, openClawNotInstalled, refreshChannelsStatus])
 
   return (
     <Card
@@ -1426,12 +1517,17 @@ function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatu
           <Button
             icon={<ReloadOutlined />}
             loading={loading}
-            disabled={!device.online}
+            disabled={!device.online || openClawNotInstalled}
             onClick={() => void refreshChannelsStatus(true)}
           >
             刷新
           </Button>
-          <Button type="primary" icon={<SettingOutlined />} onClick={onConfigure}>
+          <Button
+            type="primary"
+            icon={<SettingOutlined />}
+            disabled={openClawNotInstalled}
+            onClick={onConfigure}
+          >
             配置 IM
           </Button>
         </Space>
@@ -1439,6 +1535,7 @@ function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatu
     >
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
         {!device.online ? <Alert type="warning" showIcon message="设备离线，无法读取 IM 通道状态" /> : null}
+        {openClawNotInstalled ? <Alert type="warning" showIcon message="OpenClaw 未安装，请先安装 OpenClaw" /> : null}
 
         {result ? (
           <Space>
@@ -1449,7 +1546,9 @@ function ChannelsStatusCard({ device, onRunCommand, onConfigure }: ChannelsStatu
         ) : null}
 
         {channels.length === 0 ? (
-          rawOutput ? (
+          openClawNotInstalled ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="OpenClaw 未安装，安装后可查看通道状态" />
+          ) : rawOutput ? (
             <pre style={terminalBlockStyle(200)}>{rawOutput}</pre>
           ) : (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无通道配置" />
@@ -1620,6 +1719,7 @@ export function DeviceDetailPage() {
   const [loadingDevice, setLoadingDevice] = useState(false)
   const [deletingDevice, setDeletingDevice] = useState(false)
   const [fallbackDevice, setFallbackDevice] = useState<DeviceSnapshot | null>(null)
+  const [openClawNotInstalled, setOpenClawNotInstalled] = useState(false)
 
   const storeDevice = getDeviceById(id)
   const commandRecordsRef = useRef(commandRecords)
@@ -1676,6 +1776,22 @@ export function DeviceDetailPage() {
     return storeDevice.updatedAt >= fallbackDevice.updatedAt ? storeDevice : fallbackDevice
   }, [fallbackDevice, storeDevice])
 
+  useEffect(() => {
+    if (!device) {
+      setOpenClawNotInstalled(false)
+      return
+    }
+
+    if (hasOpenClawInstalled(device)) {
+      setOpenClawNotInstalled(false)
+      return
+    }
+
+    setOpenClawNotInstalled(true)
+  }, [device])
+
+  const openClawKnownNotInstalled = !!device && (!hasOpenClawInstalled(device) || openClawNotInstalled)
+
   const refreshDevice = useCallback(async () => {
     if (!token || !id) {
       return
@@ -1691,13 +1807,29 @@ export function DeviceDetailPage() {
         throw new Error('缺少设备信息或登录状态')
       }
 
-      const submitted = await execDeviceCommand(token, id, {
-        command: 'openclaw',
-        args,
-        timeout,
-      })
+      const markNotInstalledIfMatched = (record?: CommandRecord | null) => {
+        if (isOpenClawNotInstalledRecord(record)) {
+          setOpenClawNotInstalled(true)
+        }
+      }
+
+      let submitted: CommandRecord
+      try {
+        submitted = await execDeviceCommand(token, id, {
+          command: 'openclaw',
+          args,
+          timeout,
+        })
+      } catch (err) {
+        if (isOpenClawNotInstalledError(err)) {
+          setOpenClawNotInstalled(true)
+          throw new Error(OPENCLAW_NOT_INSTALLED_MESSAGE)
+        }
+        throw err
+      }
 
       let latest = commandRecordsRef.current[submitted.id] ?? submitted
+      markNotInstalledIfMatched(latest)
       if (isTerminalStatus(latest.status)) {
         return latest
       }
@@ -1712,6 +1844,7 @@ export function DeviceDetailPage() {
         const wsRecord = commandRecordsRef.current[submitted.id]
         if (wsRecord) {
           latest = wsRecord
+          markNotInstalledIfMatched(latest)
           if (isTerminalStatus(latest.status)) {
             return latest
           }
@@ -1719,6 +1852,7 @@ export function DeviceDetailPage() {
 
         try {
           latest = await fetchCommandById(token, id, submitted.id)
+          markNotInstalledIfMatched(latest)
         } catch (err) {
           // 忽略轮询瞬时错误，继续等待。
           lastPollError = getErrorMessage(err, '')
@@ -1727,6 +1861,11 @@ export function DeviceDetailPage() {
         if (isTerminalStatus(latest.status)) {
           return latest
         }
+      }
+
+      if (isOpenClawNotInstalledText(lastPollError)) {
+        setOpenClawNotInstalled(true)
+        throw new Error(OPENCLAW_NOT_INSTALLED_MESSAGE)
       }
 
       if (!isTerminalStatus(latest.status)) {
@@ -1817,13 +1956,18 @@ export function DeviceDetailPage() {
         </Space>
       </Card>
 
-      {!device.hasOpenClaw ? (
+      {openClawKnownNotInstalled ? (
         <OpenClawInstallCard token={token} device={device} onRefreshDevice={refreshDevice} />
       ) : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>
-          <GatewayControlCard device={device} onRunCommand={runCommand} onRefreshDevice={refreshDevice} />
+          <GatewayControlCard
+            device={device}
+            onRunCommand={runCommand}
+            onRefreshDevice={refreshDevice}
+            openClawNotInstalled={openClawKnownNotInstalled}
+          />
         </Col>
         <Col xs={24} xl={12}>
           <SystemResourcesCard device={device} />
@@ -1836,6 +1980,7 @@ export function DeviceDetailPage() {
             device={device}
             onRunCommand={runCommand}
             onRefreshDevice={refreshDevice}
+            openClawNotInstalled={openClawKnownNotInstalled}
           />
         </Col>
         <Col xs={24} md={12} xl={8}>
@@ -1846,6 +1991,7 @@ export function DeviceDetailPage() {
             device={device}
             onRunCommand={runCommand}
             onConfigure={() => navigate(`/devices/${id}/im-config`)}
+            openClawNotInstalled={openClawKnownNotInstalled}
           />
         </Col>
       </Row>

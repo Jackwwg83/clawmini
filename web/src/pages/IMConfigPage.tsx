@@ -344,6 +344,7 @@ export function IMConfigPage() {
   const [verifyMessage, setVerifyMessage] = useState('')
   const [verifyChannelName, setVerifyChannelName] = useState('')
   const [verifyRecord, setVerifyRecord] = useState<CommandRecord | null>(null)
+  const [verifyAttemptSeed, setVerifyAttemptSeed] = useState(0)
 
   const storeDevice = getDeviceById(id)
   const commandRecordsRef = useRef(commandRecords)
@@ -577,7 +578,7 @@ export function IMConfigPage() {
   }
 
   useEffect(() => {
-    if (currentStep !== 3 || configureState !== 'success' || verifyState !== 'idle' || !platform) {
+    if (currentStep !== 3 || configureState !== 'success' || !platform) {
       return
     }
 
@@ -642,7 +643,7 @@ export function IMConfigPage() {
     return () => {
       cancelled = true
     }
-  }, [configureState, currentStep, platform, runCommand, verifyState])
+  }, [configureState, currentStep, platform, runCommand, verifyAttemptSeed])
 
   const stepItems = [
     { title: '说明' },
@@ -843,6 +844,7 @@ export function IMConfigPage() {
                       setVerifyState('idle')
                       setVerifyMessage('')
                       setVerifyRecord(null)
+                      setVerifyAttemptSeed((value) => value + 1)
                     }}
                   >
                     重试验证

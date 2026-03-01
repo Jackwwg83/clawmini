@@ -261,9 +261,10 @@ try:
 except: c = {}
 e = c.setdefault('plugins',{}).setdefault('entries',{}).setdefault('clawdbot-dingtalk',{})
 e['enabled'] = True
-e['clientId'] = '` + clientID + `'
-e['clientSecret'] = '` + clientSecret + `'
-e['aiCard'] = {'enabled': True}
+ch = c.setdefault('channels',{}).setdefault('clawdbot-dingtalk',{})
+ch['clientId'] = '` + clientID + `'
+ch['clientSecret'] = '` + clientSecret + `'
+ch['aiCard'] = {'enabled': True}
 c.setdefault('gateway',{})['mode'] = 'local'
 with open(p,'w') as f: json.dump(c, f, indent=2)
 print('OK')

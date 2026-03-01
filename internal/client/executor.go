@@ -128,7 +128,7 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 func buildExecCommand(ctx context.Context, resolvedCommand, originalCommand string, args []string, euid int, execUser *user.User) (*exec.Cmd, bool) {
 	if shouldWrapGatewayCommandWithSudo(euid, originalCommand, args, execUser) {
 		sudoArgs := make([]string, 0, 4+len(args))
-		sudoArgs = append(sudoArgs, "-u", execUser.Username, "-i", resolvedCommand)
+		sudoArgs = append(sudoArgs, "-u", execUser.Username, "-i", originalCommand)
 		sudoArgs = append(sudoArgs, args...)
 		return exec.CommandContext(ctx, "sudo", sudoArgs...), true
 	}

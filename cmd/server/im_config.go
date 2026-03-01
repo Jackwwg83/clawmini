@@ -244,7 +244,7 @@ func (a *serverApp) runDingTalkConfigure(jobID, deviceID, clientID, clientSecret
 			DisplayCommand: "openclaw plugins install clawdbot-dingtalk",
 			Command:        "openclaw",
 			Args:           []string{"plugins", "install", "clawdbot-dingtalk"},
-			Timeout:        120,
+			Timeout:        600,
 		},
 		{
 			Key:            "set-client-id",
@@ -297,7 +297,7 @@ func (a *serverApp) runFeishuConfigure(jobID, deviceID, appID, appSecret string)
 		DisplayCommand: "openclaw plugins install @anthropic-ai/feishu",
 		Command:        "openclaw",
 		Args:           []string{"plugins", "install", "@anthropic-ai/feishu"},
-		Timeout:        120,
+		Timeout:        600,
 	}); err != nil {
 		pluginName = "@anthropic-ai/lark"
 		if fallbackErr := a.runConfigureStep(jobID, deviceID, configureCommand{
@@ -306,7 +306,7 @@ func (a *serverApp) runFeishuConfigure(jobID, deviceID, appID, appSecret string)
 			DisplayCommand: "openclaw plugins install @anthropic-ai/lark",
 			Command:        "openclaw",
 			Args:           []string{"plugins", "install", "@anthropic-ai/lark"},
-			Timeout:        120,
+			Timeout:        600,
 		}); fallbackErr != nil {
 			return fallbackErr
 		}

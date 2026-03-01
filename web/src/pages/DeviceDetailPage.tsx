@@ -659,6 +659,61 @@ function parseChannelItem(rawName: string, value: unknown): ChannelInfo | null {
   }
 }
 
+function isLikelyChannelStatus(value: string): boolean {
+  const normalized = toLowerText(value)
+  if (!normalized) {
+    return false
+  }
+  return [
+    'connected',
+    'disconnected',
+    'offline',
+    'online',
+    'running',
+    'error',
+    'failed',
+    'healthy',
+    'ok',
+    'enabled',
+    'configured',
+    'inactive',
+    'stop',
+    'ready',
+  ].some((keyword) => normalized.includes(keyword))
+}
+
+function isChannelPropertyKey(value: string): boolean {
+  const normalized = toLowerText(value)
+  return [
+    'status',
+    'state',
+    'health',
+    'enabled',
+    'configured',
+    'running',
+    'connected',
+    'error',
+    'message',
+    'messages',
+  ].includes(normalized)
+}
+
+function parseChannelMapItems(obj: Record<string, unknown>): ChannelInfo[] {
+  return Object.entries(obj)
+    .map(([key, value]) => {
+      if (!key.trim() || isChannelPropertyKey(key)) {
+        return null
+      }
+
+      if (typeof value === 'string' && !isLikelyChannelStatus(value)) {
+        return null
+      }
+
+      return parseChannelItem(key, value)
+    })
+    .filter((item): item is ChannelInfo => item !== null)
+}
+
 function parseChannelsOutput(rawOutput: string): ChannelInfo[] {
   const trimmed = rawOutput.trim()
   if (!trimmed) {
@@ -674,9 +729,16 @@ function parseChannelsOutput(rawOutput: string): ChannelInfo[] {
 
   const parsedObj = toObject(parsed)
   if (parsedObj) {
-    const candidateArrays = [parsedObj.channels, parsedObj.items, parsedObj.data]
-    for (const candidate of candidateArrays) {
+    const candidateFields = [parsedObj.channels, parsedObj.items, parsedObj.data]
+    for (const candidate of candidateFields) {
       if (!Array.isArray(candidate)) {
+        const candidateObj = toObject(candidate)
+        if (candidateObj) {
+          const mappedItems = parseChannelMapItems(candidateObj)
+          if (mappedItems.length > 0) {
+            return mappedItems
+          }
+        }
         continue
       }
       const arrayItems = candidate
@@ -687,9 +749,7 @@ function parseChannelsOutput(rawOutput: string): ChannelInfo[] {
       }
     }
 
-    const mapItems = Object.entries(parsedObj)
-      .map(([key, value]) => parseChannelItem(key, value))
-      .filter((item): item is ChannelInfo => item !== null)
+    const mapItems = parseChannelMapItems(parsedObj)
     if (mapItems.length > 0) {
       return mapItems
     }
@@ -702,21 +762,30 @@ function parseChannelsOutput(rawOutput: string): ChannelInfo[] {
       continue
     }
 
-    const keyValueMatch = pureLine.match(/^([A-Za-z0-9_.-]+)\s*[:=|-]\s*(.+)$/)
+    const normalizedLine = pureLine.replace(/^[*•-]\s*/, '')
+    const keyValueMatch = normalizedLine.match(/^(.+?)\s*(?::|=|-)\s*(.+)$/)
     if (keyValueMatch?.[1] && keyValueMatch[2]) {
+      const channelName = keyValueMatch[1].trim()
+      if (!channelName || isChannelPropertyKey(channelName)) {
+        continue
+      }
       channels.push({
-        name: keyValueMatch[1],
+        name: channelName,
         status: keyValueMatch[2].trim(),
       })
       continue
     }
 
-    const simpleMatch = pureLine.match(
-      /^([A-Za-z0-9_.-]+)\s+(connected|disconnected|offline|online|running|error|failed)\b/i,
+    const simpleMatch = normalizedLine.match(
+      /^(.+?)\s+(connected|disconnected|offline|online|running|error|failed|configured|enabled)\b/i,
     )
     if (simpleMatch?.[1] && simpleMatch[2]) {
+      const channelName = simpleMatch[1].trim()
+      if (!channelName || isChannelPropertyKey(channelName)) {
+        continue
+      }
       channels.push({
-        name: simpleMatch[1],
+        name: channelName,
         status: simpleMatch[2],
       })
     }

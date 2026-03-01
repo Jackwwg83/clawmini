@@ -16,7 +16,7 @@ func (a *serverApp) installOpenClawSteps() []server.IMConfigStep {
 		{
 			Key:            "check-existing",
 			Title:          "检查 OpenClaw",
-			DisplayCommand: "which openclaw",
+			DisplayCommand: "openclaw --version",
 			Status:         "pending",
 		},
 		{
@@ -98,7 +98,7 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 		job.Error = ""
 	})
 
-	checkRec, err := a.dispatchAndWaitCommand(deviceID, "which", []string{"openclaw"}, 20)
+	checkRec, err := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-c", "openclaw --version 2>/dev/null || $HOME/.openclaw/bin/openclaw --version 2>/dev/null"}, 20)
 	if err != nil {
 		a.failInstallStep(jobID, "check-existing", "检查 OpenClaw 失败", &checkRec, err)
 		a.logAudit("openclaw.install", deviceID, err.Error(), adminIP, "failed")

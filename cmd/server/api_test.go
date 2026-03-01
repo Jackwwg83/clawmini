@@ -15,6 +15,10 @@ import (
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
+const testAdminAliasToken = "test-admin-token"
+
+var testAdminJWT string
+
 func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -27,6 +31,13 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 	devices := server.NewDeviceStore(db)
 	if err := devices.EnsureSchema(); err != nil {
 		t.Fatalf("ensure device schema: %v", err)
+	}
+	users := server.NewUserStore(db)
+	if err := users.EnsureSchema(); err != nil {
+		t.Fatalf("ensure user schema: %v", err)
+	}
+	if _, err := users.EnsureDefaultAdmin(); err != nil {
+		t.Fatalf("ensure default admin: %v", err)
 	}
 	commands := server.NewCommandStore(db)
 	if err := commands.EnsureSchema(); err != nil {
@@ -46,8 +57,16 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 	}
 	auditLogs.Start()
 	t.Cleanup(auditLogs.Stop)
-	auth := &server.TokenAuth{AdminToken: "test-admin-token", DeviceToken: "test-device-token"}
-	hub := server.NewHub(devices, commands, joinTokens, auth)
+	auth := server.NewTokenAuth("test-device-token", []byte("test-jwt-secret"), users)
+	adminUser, err := users.Authenticate("admin", "admin")
+	if err != nil {
+		t.Fatalf("authenticate default admin: %v", err)
+	}
+	testAdminJWT, err = auth.GenerateToken(adminUser)
+	if err != nil {
+		t.Fatalf("generate admin jwt: %v", err)
+	}
+	hub := server.NewHub(devices, commands, joinTokens, users, auth)
 	imConfigs := newConfigureIMJobStore(db)
 	if err := imConfigs.EnsureSchema(); err != nil {
 		t.Fatalf("ensure im config jobs schema: %v", err)
@@ -57,6 +76,7 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 
 	app := &serverApp{
 		auth:       auth,
+		users:      users,
 		devices:    devices,
 		commands:   commands,
 		joinTokens: joinTokens,
@@ -67,9 +87,12 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 	}
 
 	r := chi.NewRouter()
+	r.Post("/api/auth/login", app.handleLogin)
 	r.Route("/api", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
-			r.Use(auth.AdminMiddleware)
+			r.Use(auth.AuthMiddleware)
+			r.Get("/me", app.handleGetMe)
+			r.Put("/me/password", app.handleChangeMyPassword)
 			r.Get("/devices", app.handleListDevices)
 			r.Get("/devices/{id}", app.handleGetDevice)
 			r.Delete("/devices/{id}", app.handleDeleteDevice)
@@ -82,9 +105,20 @@ func setupTestApp(t *testing.T) (*serverApp, *chi.Mux) {
 			r.Post("/batch/exec", app.handleBatchExec)
 			r.Get("/batch/{jobId}", app.handleGetBatchJob)
 			r.Get("/audit-log", app.handleGetAuditLog)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(auth.AuthMiddleware)
+			r.Use(auth.AdminOnly)
 			r.Post("/join-tokens", app.handleCreateJoinToken)
 			r.Get("/join-tokens", app.handleListJoinTokens)
 			r.Delete("/join-tokens/{id}", app.handleDeleteJoinToken)
+			r.Post("/users", app.handleCreateUser)
+			r.Get("/users", app.handleListUsers)
+			r.Get("/users/{id}", app.handleGetUser)
+			r.Put("/users/{id}", app.handleUpdateUser)
+			r.Delete("/users/{id}", app.handleDeleteUser)
+			r.Post("/users/{id}/devices", app.handleBindUserDevice)
+			r.Delete("/users/{id}/devices/{deviceId}", app.handleUnbindUserDevice)
 		})
 	})
 	r.Get("/install.sh", app.handleInstallScript)
@@ -102,7 +136,10 @@ func doRequest(t *testing.T, r http.Handler, method, path, body, token string) *
 	}
 	req := httptest.NewRequest(method, path, bodyReader)
 	if token != "" {
-		req.Header.Set("X-Admin-Token", token)
+		if token == testAdminAliasToken {
+			token = testAdminJWT
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -598,25 +635,38 @@ func TestGetDeviceAPI_NotFound(t *testing.T) {
 
 // --- Login API Test ---
 
-func TestLoginHandler_ValidToken(t *testing.T) {
+func TestLoginHandler_ValidCredentials(t *testing.T) {
 	app, _ := setupTestApp(t)
 	loginR := chi.NewRouter()
 	loginR.Post("/api/auth/login", app.handleLogin)
 
 	rr := doRequest(t, loginR, http.MethodPost, "/api/auth/login",
-		`{"token":"test-admin-token"}`, "")
+		`{"username":"admin","password":"admin"}`, "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
+	var resp struct {
+		Token string      `json:"token"`
+		User  server.User `json:"user"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatalf("expected jwt token")
+	}
+	if resp.User.Username != "admin" {
+		t.Fatalf("expected user admin, got %q", resp.User.Username)
+	}
 }
 
-func TestLoginHandler_InvalidToken(t *testing.T) {
+func TestLoginHandler_InvalidCredentials(t *testing.T) {
 	app, _ := setupTestApp(t)
 	loginR := chi.NewRouter()
 	loginR.Post("/api/auth/login", app.handleLogin)
 
 	rr := doRequest(t, loginR, http.MethodPost, "/api/auth/login",
-		`{"token":"wrong-token"}`, "")
+		`{"username":"admin","password":"wrong-password"}`, "")
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}

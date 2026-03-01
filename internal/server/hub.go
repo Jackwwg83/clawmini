@@ -33,6 +33,7 @@ type deviceSession struct {
 type browserSession struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
+	user AuthUser
 }
 
 func (s *deviceSession) writeJSON(v interface{}) error {
@@ -66,6 +67,7 @@ type Hub struct {
 	commands   *CommandStore
 	joinTokens *JoinTokenStore
 	auth       *TokenAuth
+	users      *UserStore
 
 	upgrader websocket.Upgrader
 
@@ -82,11 +84,12 @@ type Hub struct {
 	janitorDoneCh  chan struct{}
 }
 
-func NewHub(devices *DeviceStore, commands *CommandStore, joinTokens *JoinTokenStore, auth *TokenAuth) *Hub {
+func NewHub(devices *DeviceStore, commands *CommandStore, joinTokens *JoinTokenStore, users *UserStore, auth *TokenAuth) *Hub {
 	hub := &Hub{
 		devices:    devices,
 		commands:   commands,
 		joinTokens: joinTokens,
+		users:      users,
 		auth:       auth,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
@@ -225,12 +228,13 @@ func (h *Hub) HandleBrowserWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	conn.SetReadLimit(wsReadLimit)
 
-	if err := h.authenticateBrowser(conn); err != nil {
+	user, err := h.authenticateBrowser(conn)
+	if err != nil {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "unauthorized"), time.Now().Add(time.Second))
 		return
 	}
 
-	sess := &browserSession{conn: conn}
+	sess := &browserSession{conn: conn, user: user}
 	configureWSReadKeepalive(conn)
 	stopPing := startPingLoop(sess.writePing, func() { _ = conn.Close() })
 	defer close(stopPing)
@@ -238,7 +242,7 @@ func (h *Hub) HandleBrowserWS(w http.ResponseWriter, r *http.Request) {
 	h.addBrowser(sess)
 	defer h.removeBrowser(sess)
 
-	if devices, err := h.devices.ListDevices(); err == nil {
+	if devices, err := h.listDevicesForUser(user); err == nil {
 		_ = sess.writeJSON(map[string]interface{}{
 			"event": "snapshot",
 			"ts":    nowUnix(),
@@ -274,17 +278,11 @@ func (h *Hub) serveDevice(conn *websocket.Conn) {
 		return
 	}
 	log.Printf("[ws] register: deviceID=%s", reg.DeviceID)
-	if reg.DeviceID == "" {
-		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid token"), time.Now().Add(time.Second))
-		return
-	}
-	if !h.auth.ValidateDeviceToken(reg.Token) {
-		if h.joinTokens == nil || h.joinTokens.ValidateAndConsume(reg.Token, reg.DeviceID) != nil {
+	if err := h.registerDeviceMetadata(reg); err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrJoinTokenExpired) || errors.Is(err, ErrJoinTokenUsed) {
 			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid token"), time.Now().Add(time.Second))
 			return
 		}
-	}
-	if err := h.devices.UpsertDevice(reg); err != nil {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "db error"), time.Now().Add(time.Second))
 		return
 	}
@@ -299,14 +297,14 @@ func (h *Hub) serveDevice(conn *websocket.Conn) {
 
 	_ = sess.writeJSON(protocol.Envelope{Type: protocol.TypeAck, ID: reg.DeviceID, Data: map[string]string{"status": "registered"}})
 	if snap, err := h.devices.GetDevice(reg.DeviceID); err == nil {
-		h.broadcast("device_connected", snap)
+		h.broadcastForDevice("device_connected", snap, reg.DeviceID)
 	}
 
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			if snap, snapErr := h.devices.GetDevice(reg.DeviceID); snapErr == nil {
-				h.broadcast("device_disconnected", snap)
+				h.broadcastForDevice("device_disconnected", snap, reg.DeviceID)
 			}
 			return
 		}
@@ -314,30 +312,64 @@ func (h *Hub) serveDevice(conn *websocket.Conn) {
 	}
 }
 
-func (h *Hub) authenticateBrowser(conn *websocket.Conn) error {
+func (h *Hub) resolveRegistrationUser(token, deviceID string) (*string, error) {
+	if strings.TrimSpace(deviceID) == "" {
+		return nil, ErrNotFound
+	}
+	if h.auth.ValidateDeviceToken(token) {
+		return nil, nil
+	}
+	if h.joinTokens == nil {
+		return nil, ErrNotFound
+	}
+	consumedToken, err := h.joinTokens.ValidateAndConsume(token, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return consumedToken.UserID, nil
+}
+
+func (h *Hub) registerDeviceMetadata(reg protocol.RegisterPayload) error {
+	userID, err := h.resolveRegistrationUser(reg.Token, reg.DeviceID)
+	if err != nil {
+		return err
+	}
+	if err := h.devices.UpsertDevice(reg); err != nil {
+		return err
+	}
+	if userID != nil && h.users != nil {
+		if bindErr := h.users.BindDevice(*userID, reg.DeviceID); bindErr != nil && !errors.Is(bindErr, ErrConflict) {
+			return bindErr
+		}
+	}
+	return nil
+}
+
+func (h *Hub) authenticateBrowser(conn *websocket.Conn) (AuthUser, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, payload, err := conn.ReadMessage()
 	if err != nil {
-		return err
+		return AuthUser{}, err
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 
 	var env protocol.RawEnvelope
 	if err := json.Unmarshal(payload, &env); err != nil || env.Type != "auth" {
-		return errors.New("auth required")
+		return AuthUser{}, errors.New("auth required")
 	}
 
 	var authPayload struct {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(env.Data, &authPayload); err != nil {
-		return err
+		return AuthUser{}, err
 	}
-	if !h.auth.ValidateAdminToken(authPayload.Token) {
-		return errors.New("invalid token")
+	user, err := h.auth.ParseUserToken(authPayload.Token)
+	if err != nil {
+		return AuthUser{}, errors.New("invalid token")
 	}
 
-	return nil
+	return user, nil
 }
 
 func (h *Hub) checkWSOrigin(r *http.Request) bool {
@@ -402,7 +434,7 @@ func (h *Hub) handleDeviceMessage(sess *deviceSession, data []byte) {
 			return
 		}
 		if snap, err := h.devices.GetDevice(sess.deviceID); err == nil {
-			h.broadcast("device_heartbeat", snap)
+			h.broadcastForDevice("device_heartbeat", snap, sess.deviceID)
 		}
 	case protocol.TypeResult:
 		var result protocol.ResultPayload
@@ -416,7 +448,7 @@ func (h *Hub) handleDeviceMessage(sess *deviceSession, data []byte) {
 			return
 		}
 		if rec, err := h.commands.GetByDeviceAndID(sess.deviceID, result.CommandID); err == nil {
-			h.broadcast("command_result", rec)
+			h.broadcastForDevice("command_result", rec, sess.deviceID)
 		}
 	}
 }
@@ -435,7 +467,7 @@ func (h *Hub) DispatchCommand(deviceID string, cmd protocol.CommandPayload) erro
 	}
 	cmdForBroadcast := cmd
 	cmdForBroadcast.Args = redactSensitiveArgs(cmd.Command, cmd.Args)
-	h.broadcast("command_dispatched", cmdForBroadcast)
+	h.broadcastForDevice("command_dispatched", cmdForBroadcast, deviceID)
 	return nil
 }
 
@@ -488,7 +520,31 @@ func (h *Hub) removeBrowser(sess *browserSession) {
 	delete(h.browsers, sess)
 }
 
-func (h *Hub) broadcast(event string, data interface{}) {
+func (h *Hub) listDevicesForUser(user AuthUser) ([]DeviceSnapshot, error) {
+	if user.Role == RoleAdmin {
+		return h.devices.ListDevices()
+	}
+	if h.users == nil {
+		return []DeviceSnapshot{}, nil
+	}
+	return h.users.ListDevicesByUser(user.ID)
+}
+
+func (h *Hub) canUserAccessDevice(user AuthUser, deviceID string) bool {
+	if user.Role == RoleAdmin {
+		return true
+	}
+	if h.users == nil || user.ID == "" || strings.TrimSpace(deviceID) == "" {
+		return false
+	}
+	ok, err := h.users.IsDeviceBoundToUser(user.ID, deviceID)
+	if err != nil {
+		return false
+	}
+	return ok
+}
+
+func (h *Hub) broadcastForDevice(event string, data interface{}, deviceID string) {
 	h.mu.RLock()
 	listeners := make([]*browserSession, 0, len(h.browsers))
 	for sess := range h.browsers {
@@ -502,6 +558,9 @@ func (h *Hub) broadcast(event string, data interface{}) {
 		"data":  data,
 	}
 	for _, sess := range listeners {
+		if !h.canUserAccessDevice(sess.user, deviceID) {
+			continue
+		}
 		if err := sess.writeJSON(message); err != nil {
 			_ = sess.conn.Close()
 			h.removeBrowser(sess)

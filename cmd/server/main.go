@@ -28,6 +28,7 @@ import (
 
 type serverApp struct {
 	auth       *server.TokenAuth
+	users      *server.UserStore
 	devices    *server.DeviceStore
 	commands   *server.CommandStore
 	joinTokens *server.JoinTokenStore
@@ -43,15 +44,8 @@ func main() {
 	addr := flag.String("addr", ":18790", "server listen address")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate PEM file")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key PEM file")
-	configPath := flag.String("config", "./clawmini.json", "path to JSON config file")
-	adminTokenFlag := flag.String("admin-token", "", "admin token override (used when CLAWMINI_ADMIN_TOKEN is unset)")
 	allowedOriginsFlag := flag.String("allowed-origins", "", "comma-separated allowed websocket origins; default is same-origin only")
 	flag.Parse()
-
-	cfg, err := loadFileConfig(*configPath)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	deviceToken := strings.TrimSpace(os.Getenv("CLAWMINI_DEVICE_TOKEN"))
 	if deviceToken == "" {
@@ -74,28 +68,30 @@ func main() {
 		log.Fatalf("ensure admin settings schema: %v", err)
 	}
 
-	adminToken, generatedAdminToken, err := resolveAdminToken(
-		adminTokenStore,
-		os.Getenv("CLAWMINI_ADMIN_TOKEN"),
-		*adminTokenFlag,
-		cfg.adminToken(),
-	)
+	jwtSecret, generatedSecret, err := resolveJWTSecret(adminTokenStore, os.Getenv("CLAWMINI_JWT_SECRET"))
 	if err != nil {
-		log.Fatalf("resolve admin token: %v", err)
+		log.Fatalf("resolve JWT secret: %v", err)
 	}
-	if generatedAdminToken {
-		fmt.Printf("Generated admin token (saved to SQLite): %s\n", adminToken)
-	}
-
-	auth := &server.TokenAuth{
-		AdminToken:  adminToken,
-		DeviceToken: deviceToken,
+	if generatedSecret {
+		log.Printf("WARNING: generated CLAWMINI JWT secret in SQLite app_settings; set CLAWMINI_JWT_SECRET in production")
 	}
 
 	deviceStore := server.NewDeviceStore(db)
 	if err := deviceStore.EnsureSchema(); err != nil {
 		log.Fatalf("ensure device schema: %v", err)
 	}
+	userStore := server.NewUserStore(db)
+	if err := userStore.EnsureSchema(); err != nil {
+		log.Fatalf("ensure user schema: %v", err)
+	}
+	createdDefaultAdmin, err := userStore.EnsureDefaultAdmin()
+	if err != nil {
+		log.Fatalf("ensure default admin user: %v", err)
+	}
+	if createdDefaultAdmin {
+		log.Printf("WARNING: created default admin user admin/admin. Change this password immediately.")
+	}
+	auth := server.NewTokenAuth(deviceToken, jwtSecret, userStore)
 
 	commandStore := server.NewCommandStore(db)
 	if err := commandStore.EnsureSchema(); err != nil {
@@ -119,7 +115,7 @@ func main() {
 	auditLogStore.Start()
 	defer auditLogStore.Stop()
 
-	hub := server.NewHub(deviceStore, commandStore, joinTokenStore, auth)
+	hub := server.NewHub(deviceStore, commandStore, joinTokenStore, userStore, auth)
 	if err := hub.SetAllowedOrigins(splitCSV(*allowedOriginsFlag)); err != nil {
 		log.Fatalf("configure websocket allowed origins: %v", err)
 	}
@@ -135,6 +131,7 @@ func main() {
 
 	app := &serverApp{
 		auth:       auth,
+		users:      userStore,
 		devices:    deviceStore,
 		commands:   commandStore,
 		joinTokens: joinTokenStore,
@@ -158,7 +155,9 @@ func main() {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
-			r.Use(auth.AdminMiddleware)
+			r.Use(auth.AuthMiddleware)
+			r.Get("/me", app.handleGetMe)
+			r.Put("/me/password", app.handleChangeMyPassword)
 			r.Get("/devices", app.handleListDevices)
 			r.Get("/devices/{id}", app.handleGetDevice)
 			r.Delete("/devices/{id}", app.handleDeleteDevice)
@@ -171,9 +170,20 @@ func main() {
 			r.Post("/batch/exec", app.handleBatchExec)
 			r.Get("/batch/{jobId}", app.handleGetBatchJob)
 			r.Get("/audit-log", app.handleGetAuditLog)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(auth.AuthMiddleware)
+			r.Use(auth.AdminOnly)
 			r.Post("/join-tokens", app.handleCreateJoinToken)
 			r.Get("/join-tokens", app.handleListJoinTokens)
 			r.Delete("/join-tokens/{id}", app.handleDeleteJoinToken)
+			r.Post("/users", app.handleCreateUser)
+			r.Get("/users", app.handleListUsers)
+			r.Get("/users/{id}", app.handleGetUser)
+			r.Put("/users/{id}", app.handleUpdateUser)
+			r.Delete("/users/{id}", app.handleDeleteUser)
+			r.Post("/users/{id}/devices", app.handleBindUserDevice)
+			r.Delete("/users/{id}/devices/{deviceId}", app.handleUnbindUserDevice)
 		})
 	})
 
@@ -242,7 +252,8 @@ func main() {
 
 func (a *serverApp) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Token string `json:"token"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		if isBodyTooLarge(err) {
@@ -252,17 +263,50 @@ func (a *serverApp) handleLogin(w http.ResponseWriter, r *http.Request) {
 		server.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if !a.auth.ValidateAdminToken(req.Token) {
-		server.WriteError(w, http.StatusUnauthorized, "invalid token")
+
+	user, err := a.users.Authenticate(req.Username, req.Password)
+	if err != nil {
+		server.WriteError(w, http.StatusUnauthorized, "invalid username or password")
+		return
+	}
+	token, err := a.auth.GenerateToken(user)
+	if err != nil {
+		a.writeInternalError(w, "generate login token", err)
 		return
 	}
 	server.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"ok": true,
+		"token": token,
+		"user":  user,
 	})
 }
 
-func (a *serverApp) handleListDevices(w http.ResponseWriter, _ *http.Request) {
-	devices, err := a.devices.ListDevices()
+func (a *serverApp) handleListDevices(w http.ResponseWriter, r *http.Request) {
+	user, ok := server.UserFromRequest(r)
+	if !ok {
+		server.WriteError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var devices []server.DeviceSnapshot
+	var err error
+	if user.Role == server.RoleAdmin {
+		filterUserID := strings.TrimSpace(r.URL.Query().Get("userId"))
+		if filterUserID != "" {
+			if _, err := a.users.GetUserByID(filterUserID); err != nil {
+				if err == server.ErrNotFound {
+					server.WriteError(w, http.StatusNotFound, "user not found")
+					return
+				}
+				a.writeInternalError(w, "load filter user", err)
+				return
+			}
+			devices, err = a.users.ListDevicesByUser(filterUserID)
+		} else {
+			devices, err = a.devices.ListDevices()
+		}
+	} else {
+		devices, err = a.users.ListDevicesByUser(user.ID)
+	}
 	if err != nil {
 		a.writeInternalError(w, "list devices", err)
 		return
@@ -279,6 +323,9 @@ func (a *serverApp) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.writeInternalError(w, "get device", err)
+		return
+	}
+	if !a.requireDeviceAccess(w, r, id) {
 		return
 	}
 	server.WriteJSON(w, http.StatusOK, device)
@@ -301,6 +348,10 @@ func (a *serverApp) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 		}
 		a.writeInternalError(w, "load device before delete", err)
 		a.logAudit("device.delete", id, err.Error(), adminIP, "failed")
+		return
+	}
+	if !a.requireDeviceAccess(w, r, id) {
+		a.logAudit("device.delete", id, "forbidden", adminIP, "forbidden")
 		return
 	}
 
@@ -329,6 +380,7 @@ func (a *serverApp) handleCreateJoinToken(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Label          string `json:"label"`
 		ExpiresInHours int    `json:"expiresInHours"`
+		UserID         string `json:"userId"`
 	}
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		if isBodyTooLarge(err) {
@@ -342,8 +394,19 @@ func (a *serverApp) handleCreateJoinToken(w http.ResponseWriter, r *http.Request
 		server.WriteError(w, http.StatusBadRequest, "expiresInHours must be positive")
 		return
 	}
+	userID := strings.TrimSpace(req.UserID)
+	if userID != "" {
+		if _, err := a.users.GetUserByID(userID); err != nil {
+			if err == server.ErrNotFound {
+				server.WriteError(w, http.StatusBadRequest, "user not found")
+				return
+			}
+			a.writeInternalError(w, "validate join token user", err)
+			return
+		}
+	}
 
-	token, err := a.joinTokens.CreateToken(strings.TrimSpace(req.Label), time.Duration(req.ExpiresInHours)*time.Hour)
+	token, err := a.joinTokens.CreateToken(strings.TrimSpace(req.Label), time.Duration(req.ExpiresInHours)*time.Hour, userID)
 	if err != nil {
 		a.writeInternalError(w, "create join token", err)
 		return
@@ -388,6 +451,10 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 		}
 		a.writeInternalError(w, "load device before exec", err)
 		a.logAudit("command.exec", deviceID, err.Error(), adminIP, "failed")
+		return
+	}
+	if !a.requireDeviceAccess(w, r, deviceID) {
+		a.logAudit("command.exec", deviceID, "forbidden", adminIP, "forbidden")
 		return
 	}
 
@@ -455,6 +522,9 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 func (a *serverApp) handleGetCommand(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
 	cmdID := chi.URLParam(r, "cmdId")
+	if !a.requireDeviceAccess(w, r, deviceID) {
+		return
+	}
 	rec, err := a.commands.GetByDeviceAndID(deviceID, cmdID)
 	if err != nil {
 		if err == server.ErrNotFound {

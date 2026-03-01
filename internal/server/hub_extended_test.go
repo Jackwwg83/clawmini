@@ -19,6 +19,13 @@ func testHubServerWithJoinTokens(t *testing.T) (*Hub, *JoinTokenStore, *DeviceSt
 	if err := devices.EnsureSchema(); err != nil {
 		t.Fatalf("ensure device schema: %v", err)
 	}
+	users := NewUserStore(db)
+	if err := users.EnsureSchema(); err != nil {
+		t.Fatalf("ensure user schema: %v", err)
+	}
+	if _, err := users.EnsureDefaultAdmin(); err != nil {
+		t.Fatalf("ensure default admin: %v", err)
+	}
 	commands := NewCommandStore(db)
 	if err := commands.EnsureSchema(); err != nil {
 		t.Fatalf("ensure command schema: %v", err)
@@ -28,8 +35,8 @@ func testHubServerWithJoinTokens(t *testing.T) (*Hub, *JoinTokenStore, *DeviceSt
 		t.Fatalf("ensure join token schema: %v", err)
 	}
 
-	auth := &TokenAuth{AdminToken: "admin-token", DeviceToken: "device-token"}
-	hub := NewHub(devices, commands, joinTokens, auth)
+	auth := NewTokenAuth("device-token", []byte("hub-test-secret"), users)
+	hub := NewHub(devices, commands, joinTokens, users, auth)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleDeviceWS)
@@ -43,7 +50,7 @@ func testHubServerWithJoinTokens(t *testing.T) (*Hub, *JoinTokenStore, *DeviceSt
 func TestHubRejectsExpiredJoinToken(t *testing.T) {
 	hub, joinTokens, _, _, deviceWSURL := testHubServerWithJoinTokens(t)
 
-	tok, err := joinTokens.CreateToken("expire-test", time.Hour)
+	tok, err := joinTokens.CreateToken("expire-test", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -224,7 +231,7 @@ func TestHubRejectsNonRegisterFirstMessage(t *testing.T) {
 func TestHubJoinTokenMarksDeviceAfterUse(t *testing.T) {
 	_, joinTokens, _, _, deviceWSURL := testHubServerWithJoinTokens(t)
 
-	tok, err := joinTokens.CreateToken("track-usage", time.Hour)
+	tok, err := joinTokens.CreateToken("track-usage", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -297,12 +304,16 @@ func TestHubJanitorStartStop(t *testing.T) {
 	if err := devices.EnsureSchema(); err != nil {
 		t.Fatalf("ensure device schema: %v", err)
 	}
+	users := NewUserStore(db)
+	if err := users.EnsureSchema(); err != nil {
+		t.Fatalf("ensure user schema: %v", err)
+	}
 	commands := NewCommandStore(db)
 	if err := commands.EnsureSchema(); err != nil {
 		t.Fatalf("ensure command schema: %v", err)
 	}
-	auth := &TokenAuth{AdminToken: "admin", DeviceToken: "device"}
-	hub := NewHub(devices, commands, nil, auth)
+	auth := NewTokenAuth("device", []byte("hub-test-secret"), users)
+	hub := NewHub(devices, commands, nil, users, auth)
 
 	// Start and stop should not panic
 	hub.Start()

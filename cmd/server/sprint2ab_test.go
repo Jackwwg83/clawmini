@@ -13,7 +13,6 @@ import (
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
-
 // ============================================================
 // Sprint 2A: Command Execution API Tests (handleExec)
 // ============================================================
@@ -274,7 +273,7 @@ func TestExecAPI_BearerTokenAuth(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/devices/dev-bearer/exec",
 		strings.NewReader(`{"command":"openclaw","args":["status"]}`))
-	req.Header.Set("Authorization", "Bearer test-admin-token")
+	req.Header.Set("Authorization", "Bearer "+testAdminJWT)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
@@ -1020,7 +1019,6 @@ func TestInitialConfigureSteps_UnsupportedPlatform(t *testing.T) {
 		}
 	}
 }
-
 
 func TestMaxFunction(t *testing.T) {
 	tests := []struct {

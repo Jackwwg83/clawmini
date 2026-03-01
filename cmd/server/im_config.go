@@ -115,6 +115,10 @@ func (a *serverApp) handleConfigureIM(w http.ResponseWriter, r *http.Request) {
 		a.logAudit("im.configure", deviceID, err.Error(), adminIP, "failed")
 		return
 	}
+	if !a.requireDeviceAccess(w, r, deviceID) {
+		a.logAudit("im.configure", deviceID, "forbidden", adminIP, "forbidden")
+		return
+	}
 
 	var req configureIMRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
@@ -161,6 +165,9 @@ func (a *serverApp) handleGetConfigureIM(w http.ResponseWriter, r *http.Request)
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobId"))
 	if deviceID == "" || jobID == "" {
 		server.WriteError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if !a.requireDeviceAccess(w, r, deviceID) {
 		return
 	}
 

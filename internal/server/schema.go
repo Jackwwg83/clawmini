@@ -11,6 +11,7 @@ const (
 	schemaNameJoinTokens = "join_tokens"
 	schemaNameBatchJobs  = "batch_jobs"
 	schemaNameAuditLog   = "audit_log"
+	schemaNameUsers      = "users"
 )
 
 func ensureSchemaMigrations(db *sql.DB, schemaName string, targetVersion int, migrations map[int]string) error {

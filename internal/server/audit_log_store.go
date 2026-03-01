@@ -25,12 +25,13 @@ type AuditLogEntry struct {
 }
 
 type AuditLogQuery struct {
-	Limit    int
-	Offset   int
-	DeviceID string
-	Action   string
-	FromUnix int64
-	ToUnix   int64
+	Limit     int
+	Offset    int
+	DeviceID  string
+	DeviceIDs []string
+	Action    string
+	FromUnix  int64
+	ToUnix    int64
 }
 
 type AuditLogPage struct {
@@ -208,6 +209,14 @@ func buildAuditWhere(query AuditLogQuery) (string, []interface{}) {
 	if deviceID := strings.TrimSpace(query.DeviceID); deviceID != "" {
 		clauses = append(clauses, "target_device_id = ?")
 		args = append(args, deviceID)
+	}
+	if len(query.DeviceIDs) > 0 {
+		placeholders := strings.Repeat("?,", len(query.DeviceIDs))
+		placeholders = strings.TrimSuffix(placeholders, ",")
+		clauses = append(clauses, "target_device_id IN ("+placeholders+")")
+		for _, deviceID := range query.DeviceIDs {
+			args = append(args, strings.TrimSpace(deviceID))
+		}
 	}
 	if action := strings.TrimSpace(query.Action); action != "" {
 		clauses = append(clauses, "action = ?")

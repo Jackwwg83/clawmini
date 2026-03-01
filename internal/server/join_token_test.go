@@ -13,7 +13,7 @@ func TestJoinTokenCreateValidateConsume(t *testing.T) {
 		t.Fatalf("ensure join token schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("测试设备", 2*time.Hour)
+	tok, err := store.CreateToken("测试设备", 2*time.Hour, "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestJoinTokenCreateValidateConsume(t *testing.T) {
 		t.Fatalf("expected token usedAt nil")
 	}
 
-	if err := store.ValidateAndConsume(tok.ID, "dev-join-1"); err != nil {
+	if _, err := store.ValidateAndConsume(tok.ID, "dev-join-1"); err != nil {
 		t.Fatalf("validate and consume: %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestJoinTokenCreateValidateConsume(t *testing.T) {
 		t.Fatalf("unexpected usedByDevice: %+v", listed[0].UsedByDevice)
 	}
 
-	err = store.ValidateAndConsume(tok.ID, "dev-join-2")
+	_, err = store.ValidateAndConsume(tok.ID, "dev-join-2")
 	if !errors.Is(err, ErrJoinTokenUsed) {
 		t.Fatalf("expected ErrJoinTokenUsed, got %v", err)
 	}
@@ -64,7 +64,7 @@ func TestJoinTokenExpiryAndDelete(t *testing.T) {
 		t.Fatalf("ensure join token schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("即将过期", time.Hour)
+	tok, err := store.CreateToken("即将过期", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestJoinTokenExpiryAndDelete(t *testing.T) {
 		t.Fatalf("force token expired: %v", err)
 	}
 
-	err = store.ValidateAndConsume(tok.ID, "dev-expired")
+	_, err = store.ValidateAndConsume(tok.ID, "dev-expired")
 	if !errors.Is(err, ErrJoinTokenExpired) {
 		t.Fatalf("expected ErrJoinTokenExpired, got %v", err)
 	}

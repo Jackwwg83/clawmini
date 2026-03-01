@@ -14,12 +14,12 @@ func TestJoinTokenCreateNegativeExpiry(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	_, err := store.CreateToken("bad-expiry", -time.Hour)
+	_, err := store.CreateToken("bad-expiry", -time.Hour, "")
 	if err == nil {
 		t.Fatalf("expected error for negative expiresIn")
 	}
 
-	_, err = store.CreateToken("zero-expiry", 0)
+	_, err = store.CreateToken("zero-expiry", 0, "")
 	if err == nil {
 		t.Fatalf("expected error for zero expiresIn")
 	}
@@ -32,25 +32,25 @@ func TestJoinTokenValidateEmptyInputs(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("valid", time.Hour)
+	tok, err := store.CreateToken("valid", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
 
 	// Empty tokenID
-	err = store.ValidateAndConsume("", "device-1")
+	_, err = store.ValidateAndConsume("", "device-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for empty tokenID, got %v", err)
 	}
 
 	// Empty deviceID
-	err = store.ValidateAndConsume(tok.ID, "")
+	_, err = store.ValidateAndConsume(tok.ID, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for empty deviceID, got %v", err)
 	}
 
 	// Both empty
-	err = store.ValidateAndConsume("", "")
+	_, err = store.ValidateAndConsume("", "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for both empty, got %v", err)
 	}
@@ -63,7 +63,7 @@ func TestJoinTokenValidateNonExistent(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	err := store.ValidateAndConsume("does-not-exist-at-all", "device-1")
+	_, err := store.ValidateAndConsume("does-not-exist-at-all", "device-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for non-existent token, got %v", err)
 	}
@@ -78,7 +78,7 @@ func TestJoinTokenMultipleCreation(t *testing.T) {
 
 	ids := make(map[string]bool)
 	for i := 0; i < 10; i++ {
-		tok, err := store.CreateToken("token", time.Hour)
+		tok, err := store.CreateToken("token", time.Hour, "")
 		if err != nil {
 			t.Fatalf("create token %d: %v", i, err)
 		}
@@ -126,11 +126,11 @@ func TestJoinTokenListOrder(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok1, err := store.CreateToken("first", time.Hour)
+	tok1, err := store.CreateToken("first", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create first: %v", err)
 	}
-	tok2, err := store.CreateToken("second", time.Hour)
+	tok2, err := store.CreateToken("second", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create second: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestJoinTokenCreateEmptyLabel(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("", time.Hour)
+	tok, err := store.CreateToken("", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create token with empty label: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestJoinTokenConsumedTokenShowsUsage(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("test", time.Hour)
+	tok, err := store.CreateToken("test", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestJoinTokenConsumedTokenShowsUsage(t *testing.T) {
 	}
 
 	// Consume
-	if err := store.ValidateAndConsume(tok.ID, "dev-test"); err != nil {
+	if _, err := store.ValidateAndConsume(tok.ID, "dev-test"); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestJoinTokenConcurrentConsumption(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("concurrent", time.Hour)
+	tok, err := store.CreateToken("concurrent", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -256,7 +256,8 @@ func TestJoinTokenConcurrentConsumption(t *testing.T) {
 		go func(deviceNum int) {
 			defer wg.Done()
 			deviceID := "dev-concurrent-" + string(rune('A'+deviceNum))
-			results <- store.ValidateAndConsume(tok.ID, deviceID)
+			_, err := store.ValidateAndConsume(tok.ID, deviceID)
+			results <- err
 		}(i)
 	}
 	wg.Wait()
@@ -287,7 +288,7 @@ func TestJoinTokenConsumeAlreadyExpired(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("will-expire", time.Hour)
+	tok, err := store.CreateToken("will-expire", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -297,7 +298,7 @@ func TestJoinTokenConsumeAlreadyExpired(t *testing.T) {
 		t.Fatalf("force expire: %v", err)
 	}
 
-	err = store.ValidateAndConsume(tok.ID, "dev-late")
+	_, err = store.ValidateAndConsume(tok.ID, "dev-late")
 	if !errors.Is(err, ErrJoinTokenExpired) {
 		t.Fatalf("expected ErrJoinTokenExpired, got %v", err)
 	}
@@ -310,13 +311,13 @@ func TestJoinTokenConsumeUsedThenExpire(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("use-then-expire", time.Hour)
+	tok, err := store.CreateToken("use-then-expire", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	// Consume first
-	if err := store.ValidateAndConsume(tok.ID, "dev-first"); err != nil {
+	if _, err := store.ValidateAndConsume(tok.ID, "dev-first"); err != nil {
 		t.Fatalf("first consume: %v", err)
 	}
 
@@ -326,7 +327,7 @@ func TestJoinTokenConsumeUsedThenExpire(t *testing.T) {
 	}
 
 	// Try to consume again — should get ErrJoinTokenUsed (checked before expiry)
-	err = store.ValidateAndConsume(tok.ID, "dev-second")
+	_, err = store.ValidateAndConsume(tok.ID, "dev-second")
 	if !errors.Is(err, ErrJoinTokenUsed) {
 		t.Fatalf("expected ErrJoinTokenUsed for already-used token even if expired, got %v", err)
 	}
@@ -339,12 +340,12 @@ func TestJoinTokenDeleteConsumedToken(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 
-	tok, err := store.CreateToken("to-delete", time.Hour)
+	tok, err := store.CreateToken("to-delete", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	if err := store.ValidateAndConsume(tok.ID, "dev-1"); err != nil {
+	if _, err := store.ValidateAndConsume(tok.ID, "dev-1"); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 
@@ -367,7 +368,7 @@ func TestJoinTokenExpiresAtFieldConsistency(t *testing.T) {
 	}
 
 	before := time.Now().UTC().Unix()
-	tok, err := store.CreateToken("check-times", 24*time.Hour)
+	tok, err := store.CreateToken("check-times", 24*time.Hour, "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

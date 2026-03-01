@@ -18,6 +18,10 @@ func (a *serverApp) logAudit(action, targetDeviceID, detail, adminIP, result str
 }
 
 func (a *serverApp) handleGetAuditLog(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.currentUserOrUnauthorized(w, r)
+	if !ok {
+		return
+	}
 	limit, err := parseQueryInt(r, "limit", 50)
 	if err != nil {
 		server.WriteError(w, http.StatusBadRequest, "invalid limit")
@@ -39,14 +43,46 @@ func (a *serverApp) handleGetAuditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	page, err := a.auditLogs.List(server.AuditLogQuery{
+	query := server.AuditLogQuery{
 		Limit:    limit,
 		Offset:   offset,
 		DeviceID: strings.TrimSpace(r.URL.Query().Get("device_id")),
 		Action:   strings.TrimSpace(r.URL.Query().Get("action")),
 		FromUnix: fromUnix,
 		ToUnix:   toUnix,
-	})
+	}
+	if user.Role != server.RoleAdmin {
+		deviceIDs, err := a.users.ListBoundDeviceIDs(user.ID)
+		if err != nil {
+			a.writeInternalError(w, "load audit-log device scope", err)
+			return
+		}
+		if len(deviceIDs) == 0 {
+			server.WriteJSON(w, http.StatusOK, server.AuditLogPage{
+				Items:  []server.AuditLogEntry{},
+				Total:  0,
+				Limit:  limit,
+				Offset: offset,
+			})
+			return
+		}
+		if query.DeviceID != "" {
+			allowed := false
+			for _, id := range deviceIDs {
+				if id == query.DeviceID {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				server.WriteError(w, http.StatusForbidden, "forbidden")
+				return
+			}
+		}
+		query.DeviceIDs = deviceIDs
+	}
+
+	page, err := a.auditLogs.List(query)
 	if err != nil {
 		a.writeInternalError(w, "list audit log", err)
 		return

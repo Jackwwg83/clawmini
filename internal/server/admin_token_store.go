@@ -25,24 +25,32 @@ CREATE TABLE IF NOT EXISTS app_settings (
 	})
 }
 
-func (s *AdminTokenStore) GetAdminToken() (string, error) {
-	var token string
-	if err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = 'admin_token';`).Scan(&token); err != nil {
+func (s *AdminTokenStore) GetSetting(key string) (string, error) {
+	var value string
+	if err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key = ?;`, key).Scan(&value); err != nil {
 		if err == sql.ErrNoRows {
 			return "", ErrNotFound
 		}
 		return "", err
 	}
-	return token, nil
+	return value, nil
 }
 
-func (s *AdminTokenStore) SaveAdminToken(token string) error {
+func (s *AdminTokenStore) SaveSetting(key, value string) error {
 	_, err := s.db.Exec(`
 INSERT INTO app_settings(key, value, updated_at)
-VALUES('admin_token', ?, ?)
+VALUES(?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET
 	value=excluded.value,
 	updated_at=excluded.updated_at;
-`, token, nowUnix())
+`, key, value, nowUnix())
 	return err
+}
+
+func (s *AdminTokenStore) GetAdminToken() (string, error) {
+	return s.GetSetting("admin_token")
+}
+
+func (s *AdminTokenStore) SaveAdminToken(token string) error {
+	return s.SaveSetting("admin_token", token)
 }

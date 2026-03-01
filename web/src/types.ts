@@ -1,3 +1,16 @@
+export interface User {
+  id: string
+  username: string
+  role: 'admin' | 'user' | string
+  displayName: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UserSummary extends User {
+  deviceCount: number
+}
+
 export interface ChannelInfo {
   name: string
   status: string
@@ -61,6 +74,7 @@ export interface JoinToken {
   expiresAt: number
   usedAt?: number
   usedByDevice?: string
+  userId?: string
 }
 
 export interface WsEvent<T = unknown> {

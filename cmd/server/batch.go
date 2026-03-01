@@ -17,6 +17,10 @@ type batchExecRequest struct {
 
 func (a *serverApp) handleBatchExec(w http.ResponseWriter, r *http.Request) {
 	adminIP := clientIP(r.RemoteAddr)
+	user, ok := a.currentUserOrUnauthorized(w, r)
+	if !ok {
+		return
+	}
 	var req batchExecRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		if isBodyTooLarge(err) {
@@ -33,6 +37,19 @@ func (a *serverApp) handleBatchExec(w http.ResponseWriter, r *http.Request) {
 		server.WriteError(w, http.StatusBadRequest, "deviceIds is required")
 		a.logAudit("batch.exec", "", "deviceIds is required", adminIP, "failed")
 		return
+	}
+	allowedDeviceIDs, err := a.filterAccessibleDeviceIDs(user, deviceIDs)
+	if err != nil {
+		a.writeInternalError(w, "filter batch device access", err)
+		a.logAudit("batch.exec", "", err.Error(), adminIP, "failed")
+		return
+	}
+	for _, deviceID := range deviceIDs {
+		if !allowedDeviceIDs[deviceID] {
+			server.WriteError(w, http.StatusForbidden, "forbidden")
+			a.logAudit("batch.exec", deviceID, "forbidden", adminIP, "forbidden")
+			return
+		}
 	}
 
 	commandText := strings.TrimSpace(req.Command)
@@ -77,6 +94,10 @@ func (a *serverApp) handleGetBatchJob(w http.ResponseWriter, r *http.Request) {
 		server.WriteError(w, http.StatusBadRequest, "invalid job id")
 		return
 	}
+	user, ok := a.currentUserOrUnauthorized(w, r)
+	if !ok {
+		return
+	}
 	job, err := a.batchJobs.Get(jobID)
 	if err != nil {
 		if err == server.ErrNotFound {
@@ -85,6 +106,23 @@ func (a *serverApp) handleGetBatchJob(w http.ResponseWriter, r *http.Request) {
 		}
 		a.writeInternalError(w, "get batch job", err)
 		return
+	}
+	if user.Role != server.RoleAdmin {
+		itemDeviceIDs := make([]string, 0, len(job.Items))
+		for _, item := range job.Items {
+			itemDeviceIDs = append(itemDeviceIDs, item.DeviceID)
+		}
+		allowedDeviceIDs, err := a.filterAccessibleDeviceIDs(user, itemDeviceIDs)
+		if err != nil {
+			a.writeInternalError(w, "filter batch job access", err)
+			return
+		}
+		for _, item := range job.Items {
+			if !allowedDeviceIDs[item.DeviceID] {
+				server.WriteError(w, http.StatusForbidden, "forbidden")
+				return
+			}
+		}
 	}
 	server.WriteJSON(w, http.StatusOK, job)
 }

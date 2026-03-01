@@ -17,6 +17,7 @@ import {
   Modal,
   Progress,
   Row,
+  Select,
   Skeleton,
   Space,
   Statistic,
@@ -27,11 +28,11 @@ import {
 } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchBatchJob, startBatchExec } from '../api/client'
+import { fetchBatchJob, fetchDevices, fetchUsers, startBatchExec } from '../api/client'
 import { DeviceOnlineTag } from '../components/DeviceOnlineTag'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtime } from '../contexts/RealtimeContext'
-import type { BatchJob, BatchJobItem } from '../types'
+import type { BatchJob, BatchJobItem, DeviceSnapshot, UserSummary } from '../types'
 import { formatBytes, formatDateTime, formatLastSeen, formatPercent, toProgress } from '../utils/format'
 
 const BATCH_ACTIONS = [
@@ -47,53 +48,66 @@ function hasAttentionIssue(gatewayStatus?: string): boolean {
 }
 
 function batchStatusTag(status: string) {
-  if (status === 'success') {
-    return <Tag color="success">成功</Tag>
-  }
-  if (status === 'error') {
-    return <Tag color="error">失败</Tag>
-  }
-  if (status === 'running') {
-    return <Tag color="processing">执行中</Tag>
-  }
-  if (status === 'pending') {
-    return <Tag color="default">等待中</Tag>
-  }
+  if (status === 'success') return <Tag color="success">成功</Tag>
+  if (status === 'error') return <Tag color="error">失败</Tag>
+  if (status === 'running') return <Tag color="processing">执行中</Tag>
+  if (status === 'pending') return <Tag color="default">等待中</Tag>
   return <Tag>{status || '未知'}</Tag>
 }
 
 export function DashboardPage() {
   const navigate = useNavigate()
-  const { token } = useAuth()
+  const { token, isAdmin } = useAuth()
   const { devices, loading, refreshDevices } = useRealtime()
+
+  const [users, setUsers] = useState<UserSummary[]>([])
+  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('')
+  const [filteredDevices, setFilteredDevices] = useState<DeviceSnapshot[] | null>(null)
+
   const [selectedDeviceIDs, setSelectedDeviceIDs] = useState<string[]>([])
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [batchLoading, setBatchLoading] = useState(false)
   const [batchJob, setBatchJob] = useState<BatchJob | null>(null)
 
+  useEffect(() => {
+    if (!token || !isAdmin) {
+      setUsers([])
+      return
+    }
+    fetchUsers(token)
+      .then(setUsers)
+      .catch(() => setUsers([]))
+  }, [isAdmin, token])
+
+  useEffect(() => {
+    if (!token || !isAdmin || !selectedUserFilter) {
+      setFilteredDevices(null)
+      return
+    }
+    fetchDevices(token, selectedUserFilter)
+      .then((list) => setFilteredDevices(list))
+      .catch(() => setFilteredDevices([]))
+  }, [isAdmin, selectedUserFilter, token])
+
+  const visibleDevices = filteredDevices ?? devices
+
   const stats = useMemo(() => {
-    const total = devices.length
-    const online = devices.filter((item) => item.online).length
-    const needsAttention = devices.filter((device) => {
-      if (!device.online || !device.hasOpenClaw) {
-        return true
-      }
+    const total = visibleDevices.length
+    const online = visibleDevices.filter((item) => item.online).length
+    const needsAttention = visibleDevices.filter((device) => {
+      if (!device.online || !device.hasOpenClaw) return true
       return hasAttentionIssue(device.status?.openclaw.gatewayStatus)
     }).length
     return { total, online, needsAttention }
-  }, [devices])
+  }, [visibleDevices])
 
   useEffect(() => {
-    setSelectedDeviceIDs((prev) => prev.filter((id) => devices.some((device) => device.id === id)))
-  }, [devices])
+    setSelectedDeviceIDs((prev) => prev.filter((id) => visibleDevices.some((device) => device.id === id)))
+  }, [visibleDevices])
 
   useEffect(() => {
-    if (!token || !batchModalOpen || !batchJob) {
-      return
-    }
-    if (batchJob.status !== 'queued' && batchJob.status !== 'running') {
-      return
-    }
+    if (!token || !batchModalOpen || !batchJob) return
+    if (batchJob.status !== 'queued' && batchJob.status !== 'running') return
 
     const timer = window.setTimeout(() => {
       fetchBatchJob(token, batchJob.id)
@@ -118,9 +132,7 @@ export function DashboardPage() {
   const selectedSet = useMemo(() => new Set(selectedDeviceIDs), [selectedDeviceIDs])
 
   const batchProgress = useMemo(() => {
-    if (!batchJob || batchJob.totalCount <= 0) {
-      return 0
-    }
+    if (!batchJob || batchJob.totalCount <= 0) return 0
     return Math.round(((batchJob.successCount + batchJob.errorCount) / batchJob.totalCount) * 100)
   }, [batchJob])
 
@@ -129,7 +141,7 @@ export function DashboardPage() {
       title: '设备',
       dataIndex: 'deviceId',
       key: 'deviceId',
-      render: (value: string) => devices.find((device) => device.id === value)?.hostname || value,
+      render: (value: string) => visibleDevices.find((device) => device.id === value)?.hostname || value,
     },
     {
       title: '状态',
@@ -147,9 +159,7 @@ export function DashboardPage() {
   ]
 
   const triggerBatchAction = async (command: string, label: string) => {
-    if (!token || selectedDeviceIDs.length === 0) {
-      return
-    }
+    if (!token || selectedDeviceIDs.length === 0) return
 
     setBatchLoading(true)
     try {
@@ -190,7 +200,12 @@ export function DashboardPage() {
         </Col>
         <Col xs={24} md={8}>
           <Card>
-            <Statistic title="需关注设备" value={stats.needsAttention} valueStyle={{ color: '#d97706' }} prefix={<ExclamationCircleOutlined />} />
+            <Statistic
+              title="需关注设备"
+              value={stats.needsAttention}
+              valueStyle={{ color: '#d97706' }}
+              prefix={<ExclamationCircleOutlined />}
+            />
           </Card>
         </Col>
       </Row>
@@ -221,6 +236,19 @@ export function DashboardPage() {
         title="设备列表"
         extra={
           <Space>
+            {isAdmin ? (
+              <Select
+                allowClear
+                placeholder="按用户筛选"
+                style={{ width: 200 }}
+                value={selectedUserFilter || undefined}
+                onChange={(value) => setSelectedUserFilter(value || '')}
+                options={users.map((item) => ({
+                  value: item.id,
+                  label: `${item.displayName || item.username} (${item.role})`,
+                }))}
+              />
+            ) : null}
             <Button icon={<MessageOutlined />} onClick={() => navigate('/im-config')}>
               IM 配置
             </Button>
@@ -233,12 +261,11 @@ export function DashboardPage() {
           </Space>
         }
       >
-        {loading && devices.length === 0 ? loadingSkeleton : null}
-
-        {!loading && devices.length === 0 ? <Empty description="暂无设备数据" /> : null}
+        {loading && visibleDevices.length === 0 ? loadingSkeleton : null}
+        {!loading && visibleDevices.length === 0 ? <Empty description="暂无设备数据" /> : null}
 
         <Row gutter={[16, 16]}>
-          {devices.map((device) => {
+          {visibleDevices.map((device) => {
             const memPercent = toProgress(device.status?.memUsed ?? 0, device.status?.memTotal ?? 0)
             const diskPercent = toProgress(device.status?.diskUsed ?? 0, device.status?.diskTotal ?? 0)
 
@@ -265,14 +292,14 @@ export function DashboardPage() {
                   }
                   extra={
                     <Space>
-                      <Button type="link" icon={<MessageOutlined />} onClick={() => navigate(`/devices/${device.id}/im-config`)}>
-                        IM 配置
-                      </Button>
                       <Button
                         type="link"
-                        icon={<ArrowRightOutlined />}
-                        onClick={() => navigate(`/devices/${device.id}`)}
+                        icon={<MessageOutlined />}
+                        onClick={() => navigate(`/devices/${device.id}/im-config`)}
                       >
+                        IM 配置
+                      </Button>
+                      <Button type="link" icon={<ArrowRightOutlined />} onClick={() => navigate(`/devices/${device.id}`)}>
                         查看详情
                       </Button>
                     </Space>
@@ -311,16 +338,14 @@ export function DashboardPage() {
                           <DatabaseOutlined /> 磁盘
                         </span>
                         <Typography.Text>
-                          {formatBytes(device.status?.diskUsed ?? 0)} /{' '}
-                          {formatBytes(device.status?.diskTotal ?? 0)}
+                          {formatBytes(device.status?.diskUsed ?? 0)} / {formatBytes(device.status?.diskTotal ?? 0)}
                         </Typography.Text>
                       </Space>
                       <Progress percent={diskPercent} size="small" showInfo={false} strokeColor="#f59e0b" />
                     </div>
 
                     <Typography.Text>
-                      OpenClaw 版本：
-                      {device.status?.openclaw.version || device.openclawVersion || '--'}
+                      OpenClaw 版本：{device.status?.openclaw.version || device.openclawVersion || '--'}
                     </Typography.Text>
                     {!device.hasOpenClaw ? <Tag color="warning">未安装 OpenClaw</Tag> : null}
                     <Typography.Text type="secondary">
@@ -349,21 +374,13 @@ export function DashboardPage() {
             <Space>
               <Typography.Text>状态：</Typography.Text>
               {batchStatusTag(batchJob.status)}
-              <Typography.Text type="secondary">
-                更新于 {formatDateTime(batchJob.updatedAt)}
-              </Typography.Text>
+              <Typography.Text type="secondary">更新于 {formatDateTime(batchJob.updatedAt)}</Typography.Text>
             </Space>
             <Progress percent={batchProgress} />
             <Typography.Text type="secondary">
               成功 {batchJob.successCount} / 失败 {batchJob.errorCount} / 运行中 {batchJob.runningCount}
             </Typography.Text>
-            <Table<BatchJobItem>
-              rowKey="deviceId"
-              columns={itemColumns}
-              dataSource={batchJob.items}
-              pagination={false}
-              size="small"
-            />
+            <Table<BatchJobItem> rowKey="deviceId" columns={itemColumns} dataSource={batchJob.items} pagination={false} size="small" />
           </Space>
         ) : (
           <Skeleton active paragraph={{ rows: 6 }} />

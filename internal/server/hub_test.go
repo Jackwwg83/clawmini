@@ -11,7 +11,7 @@ import (
 	"github.com/raystone-ai/clawmini/internal/protocol"
 )
 
-func testHubServer(t *testing.T) (*Hub, *CommandStore, string, string) {
+func testHubServer(t *testing.T) (*Hub, *CommandStore, string, string, string) {
 	t.Helper()
 
 	db := openTestDB(t)
@@ -19,12 +19,27 @@ func testHubServer(t *testing.T) (*Hub, *CommandStore, string, string) {
 	if err := devices.EnsureSchema(); err != nil {
 		t.Fatalf("ensure device schema: %v", err)
 	}
+	users := NewUserStore(db)
+	if err := users.EnsureSchema(); err != nil {
+		t.Fatalf("ensure user schema: %v", err)
+	}
+	if _, err := users.EnsureDefaultAdmin(); err != nil {
+		t.Fatalf("ensure default admin: %v", err)
+	}
 	commands := NewCommandStore(db)
 	if err := commands.EnsureSchema(); err != nil {
 		t.Fatalf("ensure command schema: %v", err)
 	}
-	auth := &TokenAuth{AdminToken: "admin-token", DeviceToken: "device-token"}
-	hub := NewHub(devices, commands, nil, auth)
+	auth := NewTokenAuth("device-token", []byte("hub-test-secret"), users)
+	adminUser, err := users.Authenticate("admin", "admin")
+	if err != nil {
+		t.Fatalf("authenticate default admin: %v", err)
+	}
+	adminToken, err := auth.GenerateToken(adminUser)
+	if err != nil {
+		t.Fatalf("generate admin token: %v", err)
+	}
+	hub := NewHub(devices, commands, nil, users, auth)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleDeviceWS)
@@ -32,7 +47,7 @@ func testHubServer(t *testing.T) (*Hub, *CommandStore, string, string) {
 	baseHTTPURL := startTCP4HTTPServer(t, mux)
 
 	base := "ws" + strings.TrimPrefix(baseHTTPURL, "http")
-	return hub, commands, base + "/ws", base + "/api/ws"
+	return hub, commands, base + "/ws", base + "/api/ws", adminToken
 }
 
 func registerDevice(t *testing.T, wsURL string, reg protocol.RegisterPayload) *websocket.Conn {
@@ -96,7 +111,7 @@ func registerBrowser(t *testing.T, wsURL, token string) *websocket.Conn {
 }
 
 func TestHubDeviceConnectionLifecycle(t *testing.T) {
-	hub, _, deviceWSURL, _ := testHubServer(t)
+	hub, _, deviceWSURL, _, _ := testHubServer(t)
 
 	conn := registerDevice(t, deviceWSURL, protocol.RegisterPayload{
 		DeviceID:      "dev-1",
@@ -119,7 +134,7 @@ func TestHubDeviceConnectionLifecycle(t *testing.T) {
 }
 
 func TestHubRejectsInvalidDeviceToken(t *testing.T) {
-	hub, _, deviceWSURL, _ := testHubServer(t)
+	hub, _, deviceWSURL, _, _ := testHubServer(t)
 
 	conn, _, err := websocket.DefaultDialer.Dial(deviceWSURL, nil)
 	if err != nil {
@@ -153,7 +168,7 @@ func TestHubRejectsInvalidDeviceToken(t *testing.T) {
 }
 
 func TestHubDispatchCommandToOnlineDevice(t *testing.T) {
-	hub, commands, deviceWSURL, _ := testHubServer(t)
+	hub, commands, deviceWSURL, _, _ := testHubServer(t)
 
 	conn := registerDevice(t, deviceWSURL, protocol.RegisterPayload{
 		DeviceID:      "dev-1",
@@ -202,9 +217,9 @@ func TestHubDispatchCommandToOnlineDevice(t *testing.T) {
 }
 
 func TestHubBrowserConnectionLifecycle(t *testing.T) {
-	hub, _, _, browserWSURL := testHubServer(t)
+	hub, _, _, browserWSURL, adminToken := testHubServer(t)
 
-	conn := registerBrowser(t, browserWSURL, "admin-token")
+	conn := registerBrowser(t, browserWSURL, adminToken)
 
 	var msg map[string]interface{}
 	if err := conn.ReadJSON(&msg); err != nil {
@@ -226,7 +241,7 @@ func TestHubBrowserConnectionLifecycle(t *testing.T) {
 }
 
 func TestHubRejectsBrowserWithoutValidAuthMessage(t *testing.T) {
-	_, _, _, browserWSURL := testHubServer(t)
+	_, _, _, browserWSURL, _ := testHubServer(t)
 
 	conn := registerBrowser(t, browserWSURL, "bad-token")
 	defer conn.Close()
@@ -252,16 +267,19 @@ func TestHubAcceptsJoinTokenOnce(t *testing.T) {
 	if err := joinTokens.EnsureSchema(); err != nil {
 		t.Fatalf("ensure join token schema: %v", err)
 	}
-
-	auth := &TokenAuth{AdminToken: "admin-token", DeviceToken: "device-token"}
-	hub := NewHub(devices, commands, joinTokens, auth)
+	users := NewUserStore(db)
+	if err := users.EnsureSchema(); err != nil {
+		t.Fatalf("ensure user schema: %v", err)
+	}
+	auth := NewTokenAuth("device-token", []byte("hub-test-secret"), users)
+	hub := NewHub(devices, commands, joinTokens, users, auth)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", hub.HandleDeviceWS)
 	baseHTTPURL := startTCP4HTTPServer(t, mux)
 	deviceWSURL := "ws" + strings.TrimPrefix(baseHTTPURL, "http") + "/ws"
 
-	token, err := joinTokens.CreateToken("一次性令牌", time.Hour)
+	token, err := joinTokens.CreateToken("一次性令牌", time.Hour, "")
 	if err != nil {
 		t.Fatalf("create join token: %v", err)
 	}
@@ -307,7 +325,7 @@ func TestHubAcceptsJoinTokenOnce(t *testing.T) {
 }
 
 func TestHubRejectsBrowserMismatchedOrigin(t *testing.T) {
-	_, _, _, browserWSURL := testHubServer(t)
+	_, _, _, browserWSURL, _ := testHubServer(t)
 
 	headers := http.Header{}
 	headers.Set("Origin", "https://evil.example.com")
@@ -328,7 +346,7 @@ func TestHubRejectsBrowserMismatchedOrigin(t *testing.T) {
 }
 
 func TestHubAllowedOriginsList(t *testing.T) {
-	hub, _, _, browserWSURL := testHubServer(t)
+	hub, _, _, browserWSURL, adminToken := testHubServer(t)
 	if err := hub.SetAllowedOrigins([]string{"https://console.example.com"}); err != nil {
 		t.Fatalf("set allowed origins: %v", err)
 	}
@@ -344,7 +362,7 @@ func TestHubAllowedOriginsList(t *testing.T) {
 	if err := conn.WriteJSON(map[string]interface{}{
 		"type": "auth",
 		"data": map[string]string{
-			"token": "admin-token",
+			"token": adminToken,
 		},
 	}); err != nil {
 		t.Fatalf("send browser auth: %v", err)
@@ -360,7 +378,7 @@ func TestHubAllowedOriginsList(t *testing.T) {
 }
 
 func TestHubAllowedOriginsStillAllowsDeviceWithoutOrigin(t *testing.T) {
-	hub, _, deviceWSURL, _ := testHubServer(t)
+	hub, _, deviceWSURL, _, _ := testHubServer(t)
 	if err := hub.SetAllowedOrigins([]string{"https://console.example.com"}); err != nil {
 		t.Fatalf("set allowed origins: %v", err)
 	}
@@ -381,7 +399,7 @@ func TestHubAllowedOriginsStillAllowsDeviceWithoutOrigin(t *testing.T) {
 }
 
 func TestHubSetAllowedOriginsRejectsInvalidOrigin(t *testing.T) {
-	hub, _, _, _ := testHubServer(t)
+	hub, _, _, _, _ := testHubServer(t)
 	if err := hub.SetAllowedOrigins([]string{"not-a-url"}); err == nil {
 		t.Fatalf("expected invalid origin to fail")
 	}

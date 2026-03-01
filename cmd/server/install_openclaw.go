@@ -51,6 +51,10 @@ func (a *serverApp) handleInstallOpenClaw(w http.ResponseWriter, r *http.Request
 		a.logAudit("openclaw.install", deviceID, err.Error(), adminIP, "failed")
 		return
 	}
+	if !a.requireDeviceAccess(w, r, deviceID) {
+		a.logAudit("openclaw.install", deviceID, "forbidden", adminIP, "forbidden")
+		return
+	}
 
 	job, err := a.imConfigs.create(deviceID, "openclaw-install", installOpenClawSteps())
 	if err != nil {
@@ -69,6 +73,9 @@ func (a *serverApp) handleGetInstallOpenClaw(w http.ResponseWriter, r *http.Requ
 	jobID := strings.TrimSpace(chi.URLParam(r, "jobId"))
 	if deviceID == "" || jobID == "" {
 		server.WriteError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if !a.requireDeviceAccess(w, r, deviceID) {
 		return
 	}
 

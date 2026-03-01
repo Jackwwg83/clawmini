@@ -1,11 +1,34 @@
-import type { AuditLogPage, BatchJob, CommandRecord, DeviceSnapshot, JoinToken } from '../types'
+import type {
+  AuditLogPage,
+  BatchJob,
+  CommandRecord,
+  DeviceSnapshot,
+  JoinToken,
+  User,
+  UserSummary,
+} from '../types'
 
 interface ApiError {
   error?: string
 }
 
 interface LoginResponse {
-  ok: boolean
+  token: string
+  user: User
+}
+
+interface MeResponse {
+  user: User
+  devices: DeviceSnapshot[]
+}
+
+interface UsersResponse {
+  users: UserSummary[]
+}
+
+interface UserDetailResponse {
+  user: User
+  devices: DeviceSnapshot[]
 }
 
 interface DevicesResponse {
@@ -63,7 +86,7 @@ interface BatchExecResponse {
 }
 
 const API_BASE = '/api'
-export const AUTH_TOKEN_STORAGE_KEY = 'clawmini_admin_token'
+export const AUTH_TOKEN_STORAGE_KEY = 'clawmini_jwt_token'
 
 let unauthorizedHandler: (() => void) | null = null
 let isHandlingUnauthorized = false
@@ -84,6 +107,10 @@ function handleUnauthorized() {
   } finally {
     isHandlingUnauthorized = false
   }
+
+  if (window.location.pathname !== '/login') {
+    window.location.assign('/login')
+  }
 }
 
 async function requestJson<T>(
@@ -96,7 +123,7 @@ async function requestJson<T>(
     headers.set('Content-Type', 'application/json')
   }
   if (token) {
-    headers.set('X-Admin-Token', token)
+    headers.set('Authorization', `Bearer ${token}`)
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -116,15 +143,74 @@ async function requestJson<T>(
   return data as T
 }
 
-export async function login(token: string): Promise<LoginResponse> {
+export async function login(username: string, password: string): Promise<LoginResponse> {
   return requestJson<LoginResponse>('/auth/login', undefined, {
     method: 'POST',
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ username, password }),
   })
 }
 
-export async function fetchDevices(token: string): Promise<DeviceSnapshot[]> {
-  const data = await requestJson<DevicesResponse>('/devices', token)
+export async function fetchMe(token: string): Promise<MeResponse> {
+  return requestJson<MeResponse>('/me', token)
+}
+
+export async function changeMyPassword(token: string, oldPassword: string, newPassword: string): Promise<void> {
+  await requestJson<{ ok: boolean }>('/me/password', token, {
+    method: 'PUT',
+    body: JSON.stringify({ oldPassword, newPassword }),
+  })
+}
+
+export async function fetchUsers(token: string): Promise<UserSummary[]> {
+  const data = await requestJson<UsersResponse>('/users', token)
+  return data.users || []
+}
+
+export async function createUser(
+  token: string,
+  payload: { username: string; password: string; role: string; displayName: string },
+): Promise<User> {
+  return requestJson<User>('/users', token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function fetchUserById(token: string, id: string): Promise<UserDetailResponse> {
+  return requestJson<UserDetailResponse>(`/users/${id}`, token)
+}
+
+export async function updateUser(
+  token: string,
+  id: string,
+  payload: { displayName?: string; role?: string; password?: string },
+): Promise<User> {
+  return requestJson<User>(`/users/${id}`, token, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteUser(token: string, id: string): Promise<void> {
+  await requestJson<{ ok: boolean }>(`/users/${id}`, token, { method: 'DELETE' })
+}
+
+export async function bindUserDevice(token: string, userId: string, deviceId: string): Promise<void> {
+  await requestJson<{ ok: boolean }>(`/users/${userId}/devices`, token, {
+    method: 'POST',
+    body: JSON.stringify({ deviceId }),
+  })
+}
+
+export async function unbindUserDevice(token: string, userId: string, deviceId: string): Promise<void> {
+  await requestJson<{ ok: boolean }>(`/users/${userId}/devices/${deviceId}`, token, {
+    method: 'DELETE',
+  })
+}
+
+export async function fetchDevices(token: string, userId?: string): Promise<DeviceSnapshot[]> {
+  const query = userId ? `?userId=${encodeURIComponent(userId)}` : ''
+  const data = await requestJson<DevicesResponse>(`/devices${query}`, token)
   return data.devices || []
 }
 
@@ -242,10 +328,11 @@ export async function createJoinToken(
   token: string,
   label: string,
   expiresInHours: number,
+  userId?: string,
 ): Promise<JoinToken> {
   return requestJson<JoinToken>('/join-tokens', token, {
     method: 'POST',
-    body: JSON.stringify({ label, expiresInHours }),
+    body: JSON.stringify({ label, expiresInHours, userId }),
   })
 }
 

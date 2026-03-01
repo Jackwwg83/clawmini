@@ -81,6 +81,33 @@ func resolveAdminToken(store *server.AdminTokenStore, envToken, flagToken, confi
 	return token, true, nil
 }
 
+func resolveJWTSecret(store *server.AdminTokenStore, envSecret string) (secret []byte, generated bool, err error) {
+	trimmedEnv := strings.TrimSpace(envSecret)
+	if trimmedEnv != "" {
+		if err := store.SaveSetting("jwt_secret", trimmedEnv); err != nil {
+			return nil, false, err
+		}
+		return []byte(trimmedEnv), false, nil
+	}
+
+	existing, err := store.GetSetting("jwt_secret")
+	if err == nil {
+		return []byte(existing), false, nil
+	}
+	if !errors.Is(err, server.ErrNotFound) {
+		return nil, false, err
+	}
+
+	generatedSecret, err := newRandomToken(32)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := store.SaveSetting("jwt_secret", generatedSecret); err != nil {
+		return nil, false, err
+	}
+	return []byte(generatedSecret), true, nil
+}
+
 func splitCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil

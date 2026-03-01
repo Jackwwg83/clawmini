@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type JoinToken struct {
 	ExpiresAt    int64   `json:"expiresAt"`
 	UsedAt       *int64  `json:"usedAt,omitempty"`
 	UsedByDevice *string `json:"usedByDevice,omitempty"`
+	UserID       *string `json:"userId,omitempty"`
 }
 
 type JoinTokenStore struct {
@@ -33,7 +35,7 @@ func NewJoinTokenStore(db *sql.DB) *JoinTokenStore {
 }
 
 func (s *JoinTokenStore) EnsureSchema() error {
-	return ensureSchemaMigrations(s.db, schemaNameJoinTokens, 1, map[int]string{
+	return ensureSchemaMigrations(s.db, schemaNameJoinTokens, 2, map[int]string{
 		1: `
 CREATE TABLE IF NOT EXISTS join_tokens (
 	id TEXT PRIMARY KEY,
@@ -45,10 +47,13 @@ CREATE TABLE IF NOT EXISTS join_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_join_tokens_created_at ON join_tokens(created_at DESC);
 `,
+		2: `
+ALTER TABLE join_tokens ADD COLUMN user_id TEXT;
+`,
 	})
 }
 
-func (s *JoinTokenStore) CreateToken(label string, expiresIn time.Duration) (JoinToken, error) {
+func (s *JoinTokenStore) CreateToken(label string, expiresIn time.Duration, userID string) (JoinToken, error) {
 	if expiresIn <= 0 {
 		return JoinToken{}, fmt.Errorf("expiresIn must be positive")
 	}
@@ -61,51 +66,77 @@ func (s *JoinTokenStore) CreateToken(label string, expiresIn time.Duration) (Joi
 	now := nowUnix()
 	expiresAt := time.Now().UTC().Add(expiresIn).Unix()
 	_, err = s.db.Exec(`
-INSERT INTO join_tokens(id, label, created_at, expires_at)
-VALUES(?, ?, ?, ?);
-`, tokenID, label, now, expiresAt)
+INSERT INTO join_tokens(id, label, created_at, expires_at, user_id)
+VALUES(?, ?, ?, ?, ?);
+`, tokenID, label, now, expiresAt, nullableTrim(userID))
 	if err != nil {
 		return JoinToken{}, err
 	}
 
+	var userIDPtr *string
+	if trimmed := nullableTrim(userID); trimmed != nil {
+		v := *trimmed
+		userIDPtr = &v
+	}
 	return JoinToken{
 		ID:        tokenID,
 		Label:     label,
 		CreatedAt: now,
 		ExpiresAt: expiresAt,
+		UserID:    userIDPtr,
 	}, nil
 }
 
-func (s *JoinTokenStore) ValidateAndConsume(tokenID, deviceID string) error {
+func nullableTrim(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func (s *JoinTokenStore) ValidateAndConsume(tokenID, deviceID string) (JoinToken, error) {
 	if tokenID == "" || deviceID == "" {
-		return ErrNotFound
+		return JoinToken{}, ErrNotFound
 	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return JoinToken{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var token JoinToken
 	var expiresAt int64
 	var usedAt sql.NullInt64
+	var usedByDevice sql.NullString
+	var userID sql.NullString
 	if err := tx.QueryRow(`
-SELECT expires_at, used_at
+SELECT id, label, created_at, expires_at, used_at, used_by_device, user_id
 FROM join_tokens
 WHERE id = ?;
-`, tokenID).Scan(&expiresAt, &usedAt); err != nil {
+`, tokenID).Scan(&token.ID, &token.Label, &token.CreatedAt, &expiresAt, &usedAt, &usedByDevice, &userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+			return JoinToken{}, ErrNotFound
 		}
-		return err
+		return JoinToken{}, err
+	}
+	token.ExpiresAt = expiresAt
+	if usedByDevice.Valid {
+		v := usedByDevice.String
+		token.UsedByDevice = &v
+	}
+	if userID.Valid && strings.TrimSpace(userID.String) != "" {
+		v := strings.TrimSpace(userID.String)
+		token.UserID = &v
 	}
 
 	now := nowUnix()
 	if usedAt.Valid {
-		return ErrJoinTokenUsed
+		return JoinToken{}, ErrJoinTokenUsed
 	}
 	if now > expiresAt {
-		return ErrJoinTokenExpired
+		return JoinToken{}, ErrJoinTokenExpired
 	}
 
 	res, err := tx.Exec(`
@@ -114,23 +145,29 @@ SET used_at = ?, used_by_device = ?
 WHERE id = ? AND used_at IS NULL;
 `, now, deviceID, tokenID)
 	if err != nil {
-		return err
+		return JoinToken{}, err
 	}
 
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return JoinToken{}, err
 	}
 	if affected == 0 {
-		return ErrJoinTokenUsed
+		return JoinToken{}, ErrJoinTokenUsed
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return JoinToken{}, err
+	}
+	token.UsedAt = &now
+	device := strings.TrimSpace(deviceID)
+	token.UsedByDevice = &device
+	return token, nil
 }
 
 func (s *JoinTokenStore) ListTokens() ([]JoinToken, error) {
 	rows, err := s.db.Query(`
-SELECT id, label, created_at, expires_at, used_at, used_by_device
+SELECT id, label, created_at, expires_at, used_at, used_by_device, user_id
 FROM join_tokens
 ORDER BY created_at DESC;
 `)
@@ -144,7 +181,8 @@ ORDER BY created_at DESC;
 		var token JoinToken
 		var usedAt sql.NullInt64
 		var usedByDevice sql.NullString
-		if err := rows.Scan(&token.ID, &token.Label, &token.CreatedAt, &token.ExpiresAt, &usedAt, &usedByDevice); err != nil {
+		var userID sql.NullString
+		if err := rows.Scan(&token.ID, &token.Label, &token.CreatedAt, &token.ExpiresAt, &usedAt, &usedByDevice, &userID); err != nil {
 			return nil, err
 		}
 		if usedAt.Valid {
@@ -154,6 +192,10 @@ ORDER BY created_at DESC;
 		if usedByDevice.Valid {
 			v := usedByDevice.String
 			token.UsedByDevice = &v
+		}
+		if userID.Valid && strings.TrimSpace(userID.String) != "" {
+			v := strings.TrimSpace(userID.String)
+			token.UserID = &v
 		}
 		out = append(out, token)
 	}

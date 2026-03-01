@@ -11,6 +11,8 @@ import { IMChannelSelectionPage } from './pages/IMChannelSelectionPage'
 import { IMConfigPage } from './pages/IMConfigPage'
 import { LoginPage } from './pages/LoginPage'
 import { OnboardingPage } from './pages/OnboardingPage'
+import { UserDetailPage } from './pages/UserDetailPage'
+import { UserManagementPage } from './pages/UserManagementPage'
 
 function RedirectIfAuthed() {
   const { token } = useAuth()
@@ -21,9 +23,23 @@ function RedirectIfAuthed() {
 }
 
 function RequireAuth() {
-  const { token } = useAuth()
+  const { token, loading } = useAuth()
+  if (loading) {
+    return null
+  }
   if (!token) {
     return <Navigate to="/login" replace />
+  }
+  return <Outlet />
+}
+
+function RequireAdmin() {
+  const { isAdmin, loading } = useAuth()
+  if (loading) {
+    return null
+  }
+  if (!isAdmin) {
+    return <Navigate to="/dashboard" replace />
   }
   return <Outlet />
 }
@@ -56,6 +72,12 @@ function AppRoutes() {
           <Route path="/devices/:id" element={<DeviceDetailPage />} />
           <Route path="/devices/:id/im-config" element={<IMChannelSelectionPage />} />
           <Route path="/devices/:id/im-config/:platform" element={<IMConfigPage />} />
+
+          <Route element={<RequireAdmin />}>
+            <Route path="/users" element={<UserManagementPage />} />
+            <Route path="/users/:id" element={<UserDetailPage />} />
+          </Route>
+
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Route>

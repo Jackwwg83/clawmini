@@ -7,20 +7,51 @@ import (
 	"testing"
 )
 
+func setupAuthForTest(t *testing.T) (*TokenAuth, string, string) {
+	t.Helper()
+	db := openTestDB(t)
+	users := NewUserStore(db)
+	if err := users.EnsureSchema(); err != nil {
+		t.Fatalf("ensure user schema: %v", err)
+	}
+	if _, err := users.EnsureDefaultAdmin(); err != nil {
+		t.Fatalf("ensure default admin: %v", err)
+	}
+	normalUser, err := users.CreateUser("alice", "alice-pass", RoleUser, "Alice")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	adminUser, err := users.Authenticate("admin", "admin")
+	if err != nil {
+		t.Fatalf("authenticate admin: %v", err)
+	}
+	auth := NewTokenAuth("device-secret", []byte("jwt-test-secret"), users)
+	adminToken, err := auth.GenerateToken(adminUser)
+	if err != nil {
+		t.Fatalf("generate admin token: %v", err)
+	}
+	userToken, err := auth.GenerateToken(normalUser)
+	if err != nil {
+		t.Fatalf("generate user token: %v", err)
+	}
+	return auth, adminToken, userToken
+}
+
 func TestNewTokenAuthFromEnv_DefaultsAndOverrides(t *testing.T) {
+	t.Setenv("CLAWMINI_JWT_SECRET", "")
 	t.Setenv("CLAWMINI_ADMIN_TOKEN", "")
 	t.Setenv("CLAWMINI_DEVICE_TOKEN", "")
 	if _, err := NewTokenAuthFromEnv(); err == nil {
 		t.Fatalf("expected missing env tokens to fail")
 	}
 
-	t.Setenv("CLAWMINI_ADMIN_TOKEN", "admin-override")
+	t.Setenv("CLAWMINI_JWT_SECRET", "jwt-override")
 	t.Setenv("CLAWMINI_DEVICE_TOKEN", "device-override")
 	a, err := NewTokenAuthFromEnv()
 	if err != nil {
 		t.Fatalf("unexpected env parse error: %v", err)
 	}
-	if a.AdminToken != "admin-override" || a.DeviceToken != "device-override" {
+	if string(a.JWTSecret) != "jwt-override" || a.DeviceToken != "device-override" {
 		t.Fatalf("override tokens not applied: %+v", a)
 	}
 }
@@ -45,15 +76,15 @@ func TestExtractToken_Precedence(t *testing.T) {
 	}
 }
 
-func TestAdminMiddleware_ValidatesToken(t *testing.T) {
-	auth := &TokenAuth{AdminToken: "admin-secret", DeviceToken: "device-secret"}
+func TestAuthAndAdminMiddleware(t *testing.T) {
+	auth, adminToken, userToken := setupAuthForTest(t)
 
-	t.Run("unauthorized request", func(t *testing.T) {
+	t.Run("auth middleware rejects missing token", func(t *testing.T) {
 		called := false
 		next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			called = true
 		})
-		h := auth.AdminMiddleware(next)
+		h := auth.AuthMiddleware(next)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
 		rec := httptest.NewRecorder()
@@ -75,16 +106,16 @@ func TestAdminMiddleware_ValidatesToken(t *testing.T) {
 		}
 	})
 
-	t.Run("authorized request", func(t *testing.T) {
+	t.Run("admin middleware accepts admin token", func(t *testing.T) {
 		called := false
 		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			called = true
 			w.WriteHeader(http.StatusNoContent)
 		})
-		h := auth.AdminMiddleware(next)
+		h := auth.AuthMiddleware(auth.AdminOnly(next))
 
 		req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
-		req.Header.Set("Authorization", "Bearer admin-secret")
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 
@@ -93,6 +124,22 @@ func TestAdminMiddleware_ValidatesToken(t *testing.T) {
 		}
 		if !called {
 			t.Fatalf("next handler should be called")
+		}
+	})
+
+	t.Run("admin middleware rejects normal user", func(t *testing.T) {
+		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		h := auth.AuthMiddleware(auth.AdminOnly(next))
+
+		req := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+		req.Header.Set("Authorization", "Bearer "+userToken)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got %d want %d", rec.Code, http.StatusForbidden)
 		}
 	})
 }

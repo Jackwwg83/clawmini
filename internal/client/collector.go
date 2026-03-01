@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -164,8 +166,24 @@ func uptimeSeconds() uint64 {
 func collectOpenClaw(ctx context.Context) protocol.OpenClawInfo {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
+	// Try openclaw in PATH first, then fallback to ~/.openclaw/bin/
 	cmd := exec.CommandContext(probeCtx, "openclaw", "status", "--json")
+	cmd.Env = ensureEnv(os.Environ())
 	out, err := cmd.Output()
+	if err != nil {
+		// Fallback: try ~/.openclaw/bin/openclaw directly
+		if u, uerr := user.Current(); uerr == nil {
+			ocBin := filepath.Join(u.HomeDir, ".openclaw", "bin", "openclaw")
+			cmd2 := exec.CommandContext(probeCtx, ocBin, "status", "--json")
+			cmd2.Env = ensureEnv(os.Environ())
+			out2, err2 := cmd2.Output()
+			if err2 == nil {
+				out = out2
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		return protocol.OpenClawInfo{Installed: false, GatewayStatus: "unknown"}
 	}

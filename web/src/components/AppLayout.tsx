@@ -25,7 +25,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { wsConnected } = useRealtime()
   const [passwordModalOpen, setPasswordModalOpen] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
-  const [passwordForm] = Form.useForm<{ oldPassword: string; newPassword: string }>()
+  const [passwordForm] = Form.useForm<{ oldPassword: string; newPassword: string; confirmPassword: string }>()
 
   const selectedMenu = useMemo(() => {
     if (location.pathname.startsWith('/users/')) {
@@ -80,7 +80,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <Sider breakpoint="lg" collapsedWidth={60} className="app-sider" theme="dark" width={220}>
         <div className="app-logo" onClick={() => navigate('/dashboard')}>
           <RobotOutlined />
-          <span>ClawMini</span>
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+            <span style={{ fontSize: 16, fontWeight: 700 }}>ClawMini</span>
+            <span style={{ fontSize: 10, opacity: 0.6, fontWeight: 400 }}>by 睿动AI</span>
+          </div>
         </div>
         <Menu
           theme="dark"
@@ -125,7 +128,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <Typography.Title level={4} style={{ margin: 0 }}>
               设备管理平台
             </Typography.Title>
-            <Typography.Text type="secondary">ClawMini Web 控制台</Typography.Text>
+            <Typography.Text type="secondary">ClawMini 控制台 · 睿动AI</Typography.Text>
           </div>
 
           <Space size="middle">
@@ -181,7 +184,25 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <Form.Item label="当前密码" name="oldPassword" rules={[{ required: true, message: '请输入当前密码' }]}>
             <Input.Password />
           </Form.Item>
-          <Form.Item label="新密码" name="newPassword" rules={[{ required: true, message: '请输入新密码' }]}>
+          <Form.Item label="新密码" name="newPassword" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '密码至少6位' }]}>
+            <Input.Password />
+          </Form.Item>
+          <Form.Item
+            label="确认新密码"
+            name="confirmPassword"
+            dependencies={['newPassword']}
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('newPassword') === value) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(new Error('两次输入的密码不一致'))
+                },
+              }),
+            ]}
+          >
             <Input.Password />
           </Form.Item>
         </Form>

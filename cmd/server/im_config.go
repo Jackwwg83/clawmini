@@ -264,6 +264,7 @@ e['enabled'] = True
 e['clientId'] = '` + clientID + `'
 e['clientSecret'] = '` + clientSecret + `'
 e['aiCard'] = {'enabled': True}
+c.setdefault('gateway',{})['mode'] = 'local'
 with open(p,'w') as f: json.dump(c, f, indent=2)
 print('OK')
 "`},

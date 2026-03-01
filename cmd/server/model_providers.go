@@ -11,10 +11,11 @@ import (
 )
 
 type ModelProviderRequest struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"baseUrl"`
-	APIKey  string `json:"apiKey"`
-	APIType string `json:"apiType"`
+	Name       string `json:"name"`
+	BaseURL    string `json:"baseUrl"`
+	APIKey     string `json:"apiKey"`
+	APIType    string `json:"apiType"`
+	AuthHeader *bool  `json:"authHeader,omitempty"`
 }
 
 var providerNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -34,7 +35,9 @@ try:
             'baseUrl': cfg.get('baseUrl', ''),
             'apiKey': '****' + cfg.get('apiKey', '')[-4:] if len(cfg.get('apiKey', '')) > 4 else '****',
             'apiType': cfg.get('api', ''),
-            'models': len(cfg.get('models', []))
+            'models': len(cfg.get('models', [])),
+            'authHeader': cfg.get('authHeader', True),
+            'hasHeaders': bool(cfg.get('headers', {}))
         }
     print(json.dumps(result))
 except Exception as e:
@@ -91,6 +94,15 @@ func (a *serverApp) handleUpsertModelProvider(w http.ResponseWriter, r *http.Req
 	apiKey := strings.ReplaceAll(req.APIKey, "'", "")
 	apiType := strings.ReplaceAll(req.APIType, "'", "")
 
+	// Determine authHeader behavior
+	authHeaderPython := "True"
+	headersPython := "{}"
+	if req.AuthHeader != nil && !*req.AuthHeader {
+		authHeaderPython = "False"
+		// When authHeader is disabled, pass API key via x-api-key header
+		headersPython = "{'x-api-key': '" + apiKey + "'}"
+	}
+
 	script := `python3 -c "
 import json
 p = '/root/.openclaw/openclaw.json'
@@ -100,10 +112,14 @@ except: c = {}
 m = c.setdefault('models', {})
 m['mode'] = 'merge'
 providers = m.setdefault('providers', {})
+existing = providers.get('` + name + `', {})
 providers['` + name + `'] = {
     'baseUrl': '` + baseURL + `',
     'apiKey': '` + apiKey + `',
-    'api': '` + apiType + `'
+    'api': '` + apiType + `',
+    'authHeader': ` + authHeaderPython + `,
+    'headers': ` + headersPython + `,
+    'models': existing.get('models', [])
 }
 with open(p, 'w') as f: json.dump(c, f, indent=2)
 print('OK')

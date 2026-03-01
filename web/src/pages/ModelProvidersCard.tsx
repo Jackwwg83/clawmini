@@ -10,17 +10,19 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Tag,
   Typography,
   message,
 } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
+
 const API_BASE = '/api'
 
 async function apiRequest<T>(path: string, token: string | null, opts?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + path, {
     ...opts,
-    headers: { ...(opts?.headers as Record<string,string> || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    headers: { ...(opts?.headers as Record<string, string> || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) },
   })
   if (!res.ok) throw new Error(await res.text())
   return res.json() as Promise<T>
@@ -32,6 +34,8 @@ interface ProviderInfo {
   apiKey: string
   apiType: string
   models?: number
+  authHeader?: boolean
+  hasHeaders?: boolean
 }
 
 interface ProviderFormValues {
@@ -39,6 +43,7 @@ interface ProviderFormValues {
   baseUrl: string
   apiKey: string
   apiType: string
+  authHeader: boolean
 }
 
 const API_TYPE_OPTIONS = [
@@ -48,8 +53,8 @@ const API_TYPE_OPTIONS = [
 ]
 
 const PRESETS: Record<string, Partial<ProviderFormValues>> = {
-  anthropic: { name: 'anthropic', baseUrl: 'https://api.anthropic.com', apiType: 'anthropic-messages' },
-  openai: { name: 'openai', baseUrl: 'https://api.openai.com/v1', apiType: 'openai-responses' },
+  anthropic: { name: 'anthropic', baseUrl: 'https://api.anthropic.com', apiType: 'anthropic-messages', authHeader: true },
+  openai: { name: 'openai', baseUrl: 'https://api.openai.com/v1', apiType: 'openai-responses', authHeader: true },
 }
 
 interface Props {
@@ -70,18 +75,20 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
     if (!online) return
     setLoading(true)
     try {
-      const data = await apiRequest<Record<string, { baseUrl: string; apiKey: string; apiType: string; models: number }>>(
+      const data = await apiRequest<Record<string, unknown>>(
         `/devices/${deviceId}/model-providers`,
-        token || "",
+        token,
       )
-      const list = Object.entries(data).map(([name, val]) => {
-        const info = val as { baseUrl: string; apiKey: string; apiType: string; models: number }
+      const list = Object.entries(data).map(([name, raw]) => {
+        const info = raw as { baseUrl: string; apiKey: string; apiType: string; models: number; authHeader?: boolean; hasHeaders?: boolean }
         return {
           name,
           baseUrl: info.baseUrl || '',
           apiKey: info.apiKey || '',
           apiType: info.apiType || '',
           models: info.models ?? 0,
+          authHeader: info.authHeader,
+          hasHeaders: info.hasHeaders,
         }
       })
       setProviders(list)
@@ -97,14 +104,23 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
   }, [fetchProviders])
 
   const openAdd = (preset?: string) => {
-    const values = preset && PRESETS[preset] ? { ...PRESETS[preset], apiKey: '' } : { name: '', baseUrl: '', apiKey: '', apiType: 'openai-chat' }
-    form.setFieldsValue(values as ProviderFormValues)
+    const defaults: ProviderFormValues = { name: '', baseUrl: '', apiKey: '', apiType: 'openai-chat', authHeader: true }
+    if (preset && PRESETS[preset]) {
+      Object.assign(defaults, PRESETS[preset])
+    }
+    form.setFieldsValue(defaults)
     setEditing(null)
     setModalOpen(true)
   }
 
   const openEdit = (provider: ProviderInfo) => {
-    form.setFieldsValue({ name: provider.name, baseUrl: provider.baseUrl, apiKey: '', apiType: provider.apiType })
+    form.setFieldsValue({
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      apiKey: '',
+      apiType: provider.apiType,
+      authHeader: provider.authHeader !== false,
+    })
     setEditing(provider)
     setModalOpen(true)
   }
@@ -116,9 +132,15 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
       await apiRequest(`/devices/${deviceId}/model-providers`, token, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+        body: JSON.stringify({
+          name: values.name,
+          baseUrl: values.baseUrl,
+          apiKey: values.apiKey,
+          apiType: values.apiType,
+          authHeader: values.authHeader,
+        }),
       })
-      message.success('Provider 已保存')
+      message.success('Provider 已保存，重启 Gateway 后生效')
       setModalOpen(false)
       void fetchProviders()
     } catch (err: unknown) {
@@ -132,7 +154,7 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
   const handleDelete = async (name: string) => {
     Modal.confirm({
       title: '删除 Provider',
-      content: `确定删除 "${name}" 吗？`,
+      content: `确定删除 "${name}" 吗？删除后需重启 Gateway 生效。`,
       okText: '删除',
       okType: 'danger',
       cancelText: '取消',
@@ -177,8 +199,20 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
               ]}
             >
               <List.Item.Meta
-                title={<Space><Typography.Text strong>{p.name}</Typography.Text><Tag color="blue">{apiTypeLabel(p.apiType)}</Tag>{p.models ? <Tag>{p.models} 模型</Tag> : null}</Space>}
-                description={<Space direction="vertical" size={0}><Typography.Text type="secondary">API: {p.baseUrl}</Typography.Text><Typography.Text type="secondary">Key: {p.apiKey}</Typography.Text></Space>}
+                title={
+                  <Space>
+                    <Typography.Text strong>{p.name}</Typography.Text>
+                    <Tag color="blue">{apiTypeLabel(p.apiType)}</Tag>
+                    {p.models ? <Tag>{p.models} 模型</Tag> : null}
+                    {p.hasHeaders && <Tag color="orange">自定义 Headers</Tag>}
+                  </Space>
+                }
+                description={
+                  <Space direction="vertical" size={0}>
+                    <Typography.Text type="secondary">API 地址: {p.baseUrl}</Typography.Text>
+                    <Typography.Text type="secondary">API 密钥: {p.apiKey}</Typography.Text>
+                  </Space>
+                }
               />
             </List.Item>
           )}
@@ -206,8 +240,13 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="Provider 名称" rules={[{ required: true, message: '请输入名称' }, { pattern: /^[a-zA-Z0-9_-]+$/, message: '仅支持字母、数字、下划线和连字符' }]}>
-            <Input placeholder="如 anthropic, openai, my-proxy" disabled={!!editing} />
+          <Form.Item
+            name="name"
+            label="Provider 名称"
+            rules={[{ required: true, message: '请输入名称' }, { pattern: /^[a-zA-Z0-9_-]+$/, message: '仅支持字母、数字、下划线和连字符' }]}
+            extra="必须与 OpenClaw 使用的名称一致，如 anthropic、openai"
+          >
+            <Input placeholder="anthropic" disabled={!!editing} />
           </Form.Item>
           <Form.Item name="baseUrl" label="API 地址" rules={[{ required: true, message: '请输入 API 地址' }]}>
             <Input placeholder="https://api.anthropic.com" />
@@ -217,6 +256,9 @@ export default function ModelProvidersCard({ token, deviceId, online }: Props) {
           </Form.Item>
           <Form.Item name="apiType" label="API 类型" rules={[{ required: true, message: '请选择 API 类型' }]}>
             <Select options={API_TYPE_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="authHeader" label="使用 Authorization Header" valuePropName="checked" extra="关闭后将通过 x-api-key header 传递密钥（用于代理服务）">
+            <Switch />
           </Form.Item>
         </Form>
       </Modal>

@@ -2,7 +2,7 @@ package openclaw
 
 import "strings"
 
-const officialInstallScript = "curl -fsSL https://get.openclaw.ai | bash"
+const officialInstallScript = "curl -fsSL --proto =https --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --no-onboard"
 
 // AllowedCommands defines the whitelist of openclaw subcommands the client will execute
 var AllowedCommands = map[string][]string{
@@ -99,7 +99,7 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 		if len(args) != 2 || args[0] != "-lc" {
 			return false
 		}
-		return args[1] == officialInstallScript || args[1] == "openclaw --version"
+		return args[1] == officialInstallScript || args[1] == "openclaw --version" || args[1] == "$HOME/.openclaw/bin/openclaw --version"
 	default:
 		return false
 	}

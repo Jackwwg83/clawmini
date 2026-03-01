@@ -134,17 +134,22 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 		time.Sleep(2 * time.Second)
 	}
 
+	// Try login shell first, then fallback to install-cli.sh default path
 	verifyRec, verifyErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", "openclaw --version"}, 20)
-	if verifyErr != nil {
-		a.failInstallStep(jobID, "verify-version", "验证版本失败", &verifyRec, verifyErr)
-		a.logAudit("openclaw.install", deviceID, verifyErr.Error(), adminIP, "failed")
-		return
-	}
-	if isCommandFailed(verifyRec) {
-		errText := commandErrorText(verifyRec, "验证版本失败")
-		a.failInstallStep(jobID, "verify-version", errText, &verifyRec, errors.New(errText))
-		a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
-		return
+	if verifyErr != nil || isCommandFailed(verifyRec) {
+		// Fallback: try ~/.openclaw/bin/openclaw (install-cli.sh default)
+		verifyRec, verifyErr = a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", "$HOME/.openclaw/bin/openclaw --version"}, 20)
+		if verifyErr != nil {
+			a.failInstallStep(jobID, "verify-version", "验证版本失败", &verifyRec, verifyErr)
+			a.logAudit("openclaw.install", deviceID, verifyErr.Error(), adminIP, "failed")
+			return
+		}
+		if isCommandFailed(verifyRec) {
+			errText := commandErrorText(verifyRec, "验证版本失败")
+			a.failInstallStep(jobID, "verify-version", errText, &verifyRec, errors.New(errText))
+			a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
+			return
+		}
 	}
 	version := parseVersionFromCommandOutput(verifyRec)
 	_ = a.completeInstallStep(jobID, "verify-version", &verifyRec, "")

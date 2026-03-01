@@ -155,6 +155,15 @@ func main() {
 	r.Get("/ws", hub.HandleDeviceWS)
 	r.Get("/api/ws", hub.HandleBrowserWS)
 	r.Get("/install.sh", app.handleInstallScript)
+	r.Get("/downloads/{file}", func(w http.ResponseWriter, r *http.Request) {
+		fileName := chi.URLParam(r, "file")
+		if fileName == "" || strings.Contains(fileName, "..") || strings.Contains(fileName, "/") {
+			http.Error(w, "invalid", 400)
+			return
+		}
+		path := "downloads/" + fileName
+		http.ServeFile(w, r, path)
+	})
 
 	r.Route("/api", func(r chi.Router) {
 		r.Group(func(r chi.Router) {

@@ -11,11 +11,6 @@ import (
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
-const (
-	lingerCheckCommand  = `loginctl show-user "$(id -un)" --property=Linger --value`
-	lingerEnableCommand = `loginctl enable-linger "$(id -un)"`
-)
-
 func (a *serverApp) installOpenClawSteps() []server.IMConfigStep {
 	return []server.IMConfigStep{
 		{
@@ -177,40 +172,13 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 	version := parseVersionFromCommandOutput(verifyRec)
 	_ = a.completeInstallStep(jobID, "verify-version", &verifyRec, "")
 
-	lingerCheckRec, lingerCheckErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerCheckCommand}, 20)
-	if lingerCheckErr != nil {
-		a.failInstallStep(jobID, "enable-linger", "检查 linger 状态失败", &lingerCheckRec, lingerCheckErr)
-		a.logAudit("openclaw.install", deviceID, lingerCheckErr.Error(), adminIP, "failed")
+	lingerRec, lingerErr := a.ensureLingerEnabled(jobID, deviceID, "enable-linger", adminIP)
+	if lingerErr != nil {
+		a.failInstallStep(jobID, "enable-linger", lingerErr.Error(), &lingerRec, lingerErr)
+		a.logAudit("openclaw.install", deviceID, lingerErr.Error(), adminIP, "failed")
 		return
 	}
-	if isCommandFailed(lingerCheckRec) {
-		errText := commandErrorText(lingerCheckRec, "检查 linger 状态失败")
-		a.failInstallStep(jobID, "enable-linger", errText, &lingerCheckRec, errors.New(errText))
-		a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
-		return
-	}
-
-	lingerState := strings.ToLower(strings.TrimSpace(lingerCheckRec.Stdout))
-	if lingerState == "" {
-		lingerState = strings.ToLower(strings.TrimSpace(lingerCheckRec.Stderr))
-	}
-	if lingerState == "yes" {
-		_ = a.completeInstallStep(jobID, "enable-linger", &lingerCheckRec, "")
-	} else {
-		lingerEnableRec, lingerEnableErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerEnableCommand}, 20)
-		if lingerEnableErr != nil {
-			a.failInstallStep(jobID, "enable-linger", "启用 linger 失败", &lingerEnableRec, lingerEnableErr)
-			a.logAudit("openclaw.install", deviceID, lingerEnableErr.Error(), adminIP, "failed")
-			return
-		}
-		if isCommandFailed(lingerEnableRec) {
-			errText := commandErrorText(lingerEnableRec, "启用 linger 失败")
-			a.failInstallStep(jobID, "enable-linger", errText, &lingerEnableRec, errors.New(errText))
-			a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
-			return
-		}
-		_ = a.completeInstallStep(jobID, "enable-linger", &lingerEnableRec, "")
-	}
+	_ = a.completeInstallStep(jobID, "enable-linger", &lingerRec, "")
 
 	if err := a.devices.UpdateOpenClawState(deviceID, true, version); err != nil {
 		a.failInstallJob(jobID, "更新设备 OpenClaw 状态失败: "+err.Error())

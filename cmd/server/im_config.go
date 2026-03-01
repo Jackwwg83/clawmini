@@ -473,6 +473,12 @@ func (a *serverApp) dispatchAndWaitCommand(deviceID, command string, args []stri
 	if timeout <= 0 {
 		timeout = 60
 	}
+	if requiresGatewayLinger(command, args) {
+		lingerRec, lingerErr := a.ensureLingerEnabled("", deviceID, "", "")
+		if lingerErr != nil {
+			return lingerRec, lingerErr
+		}
+	}
 
 	redactedArgs := server.RedactSensitiveArgs(command, args)
 	rec, err := a.commands.Create(deviceID, command, redactedArgs, timeout)

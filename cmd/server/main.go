@@ -495,6 +495,18 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 		a.logAudit("command.exec", deviceID, detail, adminIP, "rejected")
 		return
 	}
+	if requiresGatewayLinger(req.Command, req.Args) {
+		if _, err := a.ensureLingerEnabled("", deviceID, "", adminIP); err != nil {
+			if isLikelyDeviceOfflineError(err) {
+				server.WriteError(w, http.StatusConflict, "device offline")
+				a.logAudit("command.exec", deviceID, err.Error(), adminIP, "failed")
+				return
+			}
+			server.WriteError(w, http.StatusBadGateway, err.Error())
+			a.logAudit("command.exec", deviceID, err.Error(), adminIP, "failed")
+			return
+		}
+	}
 
 	redactedArgs := server.RedactSensitiveArgs(req.Command, req.Args)
 	commandText := strings.TrimSpace(req.Command + " " + strings.Join(redactedArgs, " "))

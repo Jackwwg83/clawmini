@@ -321,3 +321,16 @@ func TestHubJanitorStartStop(t *testing.T) {
 	hub.Stop()
 	hub.Stop() // double stop is safe
 }
+
+func TestTokenHashPrefix(t *testing.T) {
+	prefix := tokenHashPrefix("device-token-secret")
+	if prefix == "" || prefix == "device-token-secret" {
+		t.Fatalf("expected hashed prefix, got %q", prefix)
+	}
+	if len(prefix) != 12 {
+		t.Fatalf("expected 12-char prefix, got %d", len(prefix))
+	}
+	if tokenHashPrefix("   ") != "none" {
+		t.Fatalf("expected empty token prefix to be 'none'")
+	}
+}

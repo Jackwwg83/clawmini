@@ -72,6 +72,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("resolve JWT secret: %v", err)
 	}
+	if err := server.ValidateAuthConfig(deviceToken, jwtSecret); err != nil {
+		log.Fatal(err)
+	}
 	if generatedSecret {
 		log.Printf("WARNING: generated CLAWMINI JWT secret in SQLite app_settings; set CLAWMINI_JWT_SECRET in production")
 	}
@@ -356,11 +359,6 @@ func (a *serverApp) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.hub.DisconnectDevice(id)
-	if err := a.commands.DeleteByDevice(id); err != nil {
-		a.writeInternalError(w, "delete device commands", err)
-		a.logAudit("device.delete", id, err.Error(), adminIP, "failed")
-		return
-	}
 	if err := a.devices.DeleteDevice(id); err != nil {
 		if err == server.ErrNotFound {
 			server.WriteError(w, http.StatusNotFound, "device not found")

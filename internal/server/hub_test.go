@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -213,6 +214,80 @@ func TestHubDispatchCommandToOnlineDevice(t *testing.T) {
 	}
 	if got.Status != "sent" {
 		t.Fatalf("expected sent status after dispatch, got %q", got.Status)
+	}
+}
+
+func TestHubDispatchCommandBroadcastRedactsSensitiveArgs(t *testing.T) {
+	hub, commands, deviceWSURL, browserWSURL, adminToken := testHubServer(t)
+
+	deviceConn := registerDevice(t, deviceWSURL, protocol.RegisterPayload{
+		DeviceID:      "dev-redact",
+		Hostname:      "host-redact",
+		Token:         "device-token",
+		OS:            "linux",
+		Arch:          "amd64",
+		ClientVersion: "0.1.0",
+	})
+	defer deviceConn.Close()
+
+	browserConn := registerBrowser(t, browserWSURL, adminToken)
+	defer browserConn.Close()
+
+	var snapshot map[string]interface{}
+	if err := browserConn.ReadJSON(&snapshot); err != nil {
+		t.Fatalf("read browser snapshot: %v", err)
+	}
+
+	rec, err := commands.Create("dev-redact", "openclaw", []string{"config", "set", "plugins.entries.foo.secret", "******"}, 30)
+	if err != nil {
+		t.Fatalf("create command: %v", err)
+	}
+	msg := protocol.CommandPayload{
+		CommandID: rec.ID,
+		Command:   "openclaw",
+		Args:      []string{"config", "set", "plugins.entries.foo.secret", "super-secret"},
+		Timeout:   30,
+	}
+	if err := hub.DispatchCommand("dev-redact", msg); err != nil {
+		t.Fatalf("dispatch command: %v", err)
+	}
+
+	var env protocol.Envelope
+	if err := deviceConn.ReadJSON(&env); err != nil {
+		t.Fatalf("read device command envelope: %v", err)
+	}
+	if env.Type != protocol.TypeCommand {
+		t.Fatalf("expected command envelope, got %q", env.Type)
+	}
+	raw, err := json.Marshal(env.Data)
+	if err != nil {
+		t.Fatalf("marshal command payload: %v", err)
+	}
+	var received protocol.CommandPayload
+	if err := json.Unmarshal(raw, &received); err != nil {
+		t.Fatalf("decode command payload: %v", err)
+	}
+	if received.Args[3] != "super-secret" {
+		t.Fatalf("device should receive raw secret, got %q", received.Args[3])
+	}
+
+	var event map[string]interface{}
+	if err := browserConn.ReadJSON(&event); err != nil {
+		t.Fatalf("read browser event: %v", err)
+	}
+	if event["event"] != "command_dispatched" {
+		t.Fatalf("expected command_dispatched event, got %#v", event["event"])
+	}
+	data, ok := event["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected event data object, got %#v", event["data"])
+	}
+	argsRaw, ok := data["args"].([]interface{})
+	if !ok || len(argsRaw) < 4 {
+		t.Fatalf("expected args in event data, got %#v", data["args"])
+	}
+	if argsRaw[3] != "******" {
+		t.Fatalf("browser event should redact secret, got %#v", argsRaw[3])
 	}
 }
 

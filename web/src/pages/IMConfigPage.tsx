@@ -124,6 +124,10 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError'
+}
+
 function toLowerText(value?: string): string {
   return (value || '').trim().toLowerCase()
 }
@@ -344,6 +348,7 @@ export function IMConfigPage() {
   const storeDevice = getDeviceById(id)
   const commandRecordsRef = useRef(commandRecords)
   const cancelledRef = useRef(false)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   const platform = useMemo<IMPlatform | null>(() => {
     if (platformParam === 'dingtalk' || platformParam === 'feishu') {
@@ -362,8 +367,15 @@ export function IMConfigPage() {
 
   useEffect(() => {
     cancelledRef.current = false
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
     return () => {
       cancelledRef.current = true
+      controller.abort()
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
     }
   }, [id, platformParam])
 
@@ -375,7 +387,7 @@ export function IMConfigPage() {
     let cancelled = false
     setLoadingDevice(true)
 
-    fetchDeviceById(token, id)
+    fetchDeviceById(token, id, abortControllerRef.current?.signal)
       .then((detail) => {
         if (cancelled) {
           return
@@ -383,6 +395,9 @@ export function IMConfigPage() {
         setFallbackDevice(detail)
       })
       .catch((err) => {
+        if (isAbortError(err)) {
+          return
+        }
         if (cancelled) {
           return
         }
@@ -416,12 +431,21 @@ export function IMConfigPage() {
       if (!token || !id) {
         throw new Error('缺少登录状态或设备 ID')
       }
+      const signal = abortControllerRef.current?.signal
+      if (signal?.aborted) {
+        throw new Error('请求已取消')
+      }
 
-      const submitted = await execDeviceCommand(token, id, {
-        command: 'openclaw',
-        args,
-        timeout,
-      })
+      const submitted = await execDeviceCommand(
+        token,
+        id,
+        {
+          command: 'openclaw',
+          args,
+          timeout,
+        },
+        signal,
+      )
 
       let latest = commandRecordsRef.current[submitted.id] ?? submitted
       if (isTerminalStatus(latest.status)) {
@@ -444,11 +468,14 @@ export function IMConfigPage() {
         }
 
         try {
-          latest = await fetchCommandById(token, id, submitted.id)
+          latest = await fetchCommandById(token, id, submitted.id, signal)
           if (isTerminalStatus(latest.status)) {
             return latest
           }
         } catch (err) {
+          if (isAbortError(err)) {
+            throw err
+          }
           lastPollError = getErrorMessage(err, '')
         }
       }
@@ -473,13 +500,22 @@ export function IMConfigPage() {
       setVerifyRecord(null)
 
       try {
-        const createdJob = await startConfigureIM(token, id, {
-          platform,
-          credentials: {
-            id: nextCredential.id,
-            secret: nextCredential.secret,
+        const signal = abortControllerRef.current?.signal
+        if (signal?.aborted) {
+          return
+        }
+        const createdJob = await startConfigureIM(
+          token,
+          id,
+          {
+            platform,
+            credentials: {
+              id: nextCredential.id,
+              secret: nextCredential.secret,
+            },
           },
-        })
+          signal,
+        )
 
         if (cancelledRef.current) {
           return
@@ -510,10 +546,13 @@ export function IMConfigPage() {
             return
           }
 
-          latest = await fetchConfigureIMJob(token, id, createdJob.id)
+          latest = await fetchConfigureIMJob(token, id, createdJob.id, signal)
           setConfigureSteps(latest.steps)
         }
       } catch (err) {
+        if (isAbortError(err)) {
+          return
+        }
         if (cancelledRef.current) {
           return
         }

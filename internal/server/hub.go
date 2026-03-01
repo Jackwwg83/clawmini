@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -277,7 +279,7 @@ func (h *Hub) serveDevice(conn *websocket.Conn) {
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad register payload"), time.Now().Add(time.Second))
 		return
 	}
-	log.Printf("[ws] register: deviceID=%s", reg.DeviceID)
+	log.Printf("[ws] register: deviceID=%s tokenHashPrefix=%s", reg.DeviceID, tokenHashPrefix(reg.Token))
 	if err := h.registerDeviceMetadata(reg); err != nil {
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrJoinTokenExpired) || errors.Is(err, ErrJoinTokenUsed) {
 			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid token"), time.Now().Add(time.Second))
@@ -310,6 +312,19 @@ func (h *Hub) serveDevice(conn *websocket.Conn) {
 		}
 		h.handleDeviceMessage(sess, data)
 	}
+}
+
+func tokenHashPrefix(token string) string {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return "none"
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	hash := hex.EncodeToString(sum[:])
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func (h *Hub) resolveRegistrationUser(token, deviceID string) (*string, error) {

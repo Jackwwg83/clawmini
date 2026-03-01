@@ -54,7 +54,7 @@ export function LoginPage() {
 
           <Space>
             <SafetyOutlined style={{ color: '#0f766e' }} />
-            <Typography.Text type="secondary">登录态保存在当前浏览器 localStorage</Typography.Text>
+            <Typography.Text type="secondary">登录态仅保存在当前会话（sessionStorage）</Typography.Text>
           </Space>
         </Space>
       </Card>

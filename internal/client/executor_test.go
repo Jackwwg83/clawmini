@@ -69,3 +69,60 @@ sleep 2
 		t.Fatalf("expected timeout stderr message")
 	}
 }
+
+func TestExecutorCapsStdoutWithTruncationMarker(t *testing.T) {
+	mockDir := writeMockOpenClaw(t, `#!/bin/sh
+dd if=/dev/zero bs=2048 count=1024 2>/dev/null | tr '\0' 'a'
+`)
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	exec := NewExecutor()
+	result := exec.Execute(context.Background(), protocol.CommandPayload{
+		CommandID: "cmd-cap-stdout",
+		Command:   "openclaw",
+		Args:      []string{"logs"},
+		Timeout:   5,
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected success exit code, got %d stderr=%q", result.ExitCode, result.Stderr)
+	}
+	if len(result.Stdout) > int(maxCapturedOutputBytes) {
+		t.Fatalf("stdout len=%d exceeds cap=%d", len(result.Stdout), maxCapturedOutputBytes)
+	}
+	if !strings.HasSuffix(result.Stdout, truncatedOutputMarker) {
+		t.Fatalf("expected truncation marker suffix, got tail=%q", result.Stdout[max(0, len(result.Stdout)-32):])
+	}
+}
+
+func TestExecutorCapsStderrWithTruncationMarker(t *testing.T) {
+	mockDir := writeMockOpenClaw(t, `#!/bin/sh
+dd if=/dev/zero bs=2048 count=1024 2>/dev/null | tr '\0' 'b' 1>&2
+`)
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	exec := NewExecutor()
+	result := exec.Execute(context.Background(), protocol.CommandPayload{
+		CommandID: "cmd-cap-stderr",
+		Command:   "openclaw",
+		Args:      []string{"logs"},
+		Timeout:   5,
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected success exit code, got %d stderr=%q", result.ExitCode, result.Stderr)
+	}
+	if len(result.Stderr) > int(maxCapturedOutputBytes) {
+		t.Fatalf("stderr len=%d exceeds cap=%d", len(result.Stderr), maxCapturedOutputBytes)
+	}
+	if !strings.HasSuffix(result.Stderr, truncatedOutputMarker) {
+		t.Fatalf("expected truncation marker suffix")
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

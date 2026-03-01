@@ -16,7 +16,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => {
-    const stored = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+    const stored = sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
     return stored && stored.trim() ? stored : null
   })
   const [user, setUser] = useState<User | null>(null)
@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(resp.user)
       })
       .catch(() => {
-        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+        sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
         setToken(null)
         setUser(null)
       })
@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(true)
         try {
           const result = await login(cleanUsername, password)
-          localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, result.token)
+          sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, result.token)
           setToken(result.token)
           setUser(result.user)
         } finally {
@@ -82,7 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(resp.user)
       },
       logout: () => {
-        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+        sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
         setToken(null)
         setUser(null)
       },

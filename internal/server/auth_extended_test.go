@@ -483,22 +483,6 @@ func TestExtractToken_BasicAuth(t *testing.T) {
 	}
 }
 
-// --- NewTokenAuthFromEnv with ADMIN_TOKEN Fallback ---
-
-func TestNewTokenAuthFromEnv_AdminTokenFallback(t *testing.T) {
-	t.Setenv("CLAWMINI_DEVICE_TOKEN", "device-token")
-	t.Setenv("CLAWMINI_JWT_SECRET", "")
-	t.Setenv("CLAWMINI_ADMIN_TOKEN", "admin-fallback")
-
-	auth, err := NewTokenAuthFromEnv()
-	if err != nil {
-		t.Fatalf("expected fallback to ADMIN_TOKEN: %v", err)
-	}
-	if string(auth.JWTSecret) != "admin-fallback" {
-		t.Fatalf("expected JWT secret 'admin-fallback', got %q", string(auth.JWTSecret))
-	}
-}
-
 func TestNewTokenAuthFromEnv_MissingAll(t *testing.T) {
 	t.Setenv("CLAWMINI_DEVICE_TOKEN", "")
 	t.Setenv("CLAWMINI_JWT_SECRET", "")
@@ -507,5 +491,28 @@ func TestNewTokenAuthFromEnv_MissingAll(t *testing.T) {
 	_, err := NewTokenAuthFromEnv()
 	if err == nil {
 		t.Fatalf("expected error when all tokens missing")
+	}
+}
+
+func TestNewTokenAuthFromEnv_RejectsShortTokens(t *testing.T) {
+	t.Setenv("CLAWMINI_DEVICE_TOKEN", "short-token")
+	t.Setenv("CLAWMINI_JWT_SECRET", "short-secret")
+	t.Setenv("CLAWMINI_ADMIN_TOKEN", "")
+
+	_, err := NewTokenAuthFromEnv()
+	if err == nil {
+		t.Fatalf("expected short token validation error")
+	}
+}
+
+func TestValidateAuthConfig(t *testing.T) {
+	if err := ValidateAuthConfig("device-token-1234", []byte("jwt-secret-123456")); err != nil {
+		t.Fatalf("expected valid auth config, got %v", err)
+	}
+	if err := ValidateAuthConfig("short", []byte("jwt-secret-123456")); err == nil {
+		t.Fatalf("expected short device token to fail")
+	}
+	if err := ValidateAuthConfig("device-token-1234", []byte("short")); err == nil {
+		t.Fatalf("expected short jwt secret to fail")
 	}
 }

@@ -101,7 +101,7 @@ function handleUnauthorized() {
   }
 
   isHandlingUnauthorized = true
-  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+  sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
   try {
     unauthorizedHandler?.()
   } finally {
@@ -214,18 +214,20 @@ export async function fetchDevices(token: string, userId?: string): Promise<Devi
   return data.devices || []
 }
 
-export async function fetchDeviceById(token: string, id: string): Promise<DeviceSnapshot> {
-  return requestJson<DeviceSnapshot>(`/devices/${id}`, token)
+export async function fetchDeviceById(token: string, id: string, signal?: AbortSignal): Promise<DeviceSnapshot> {
+  return requestJson<DeviceSnapshot>(`/devices/${id}`, token, { signal })
 }
 
 export async function execDeviceCommand(
   token: string,
   deviceId: string,
   payload: ExecRequest,
+  signal?: AbortSignal,
 ): Promise<CommandRecord> {
   return requestJson<CommandRecord>(`/devices/${deviceId}/exec`, token, {
     method: 'POST',
     body: JSON.stringify(payload),
+    signal,
   })
 }
 
@@ -233,18 +235,21 @@ export async function fetchCommandById(
   token: string,
   deviceId: string,
   cmdId: string,
+  signal?: AbortSignal,
 ): Promise<CommandRecord> {
-  return requestJson<CommandRecord>(`/devices/${deviceId}/exec/${cmdId}`, token)
+  return requestJson<CommandRecord>(`/devices/${deviceId}/exec/${cmdId}`, token, { signal })
 }
 
 export async function startConfigureIM(
   token: string,
   deviceId: string,
   payload: ConfigureIMRequest,
+  signal?: AbortSignal,
 ): Promise<ConfigureIMJob> {
   return requestJson<ConfigureIMJob>(`/devices/${deviceId}/configure-im`, token, {
     method: 'POST',
     body: JSON.stringify(payload),
+    signal,
   })
 }
 
@@ -252,8 +257,9 @@ export async function fetchConfigureIMJob(
   token: string,
   deviceId: string,
   jobId: string,
+  signal?: AbortSignal,
 ): Promise<ConfigureIMJob> {
-  return requestJson<ConfigureIMJob>(`/devices/${deviceId}/configure-im/${jobId}`, token)
+  return requestJson<ConfigureIMJob>(`/devices/${deviceId}/configure-im/${jobId}`, token, { signal })
 }
 
 export async function installOpenClaw(token: string, deviceId: string): Promise<ConfigureIMJob> {

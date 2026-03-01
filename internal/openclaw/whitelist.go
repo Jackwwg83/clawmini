@@ -26,42 +26,61 @@ func ValidateCommand(cmd string, args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	subCmd := args[0]
-	allowedArgs, ok := AllowedCommands[subCmd]
-	if !ok {
-		return false
-	}
-	allowedSet := make(map[string]struct{}, len(allowedArgs))
-	for _, arg := range allowedArgs {
-		allowedSet[arg] = struct{}{}
-	}
-
-	positionalCounts := make(map[string]int)
-
-	// Reject shell injection attempts
-	for i := 1; i < len(args); i++ {
-		arg := args[i]
+	for _, arg := range args[1:] {
 		if strings.ContainsAny(arg, ";|&`") {
 			return false
 		}
-		if _, ok := allowedSet[arg]; ok {
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
-			return false
-		}
-		// Positional values are only allowed after a validated verb.
-		parent, ok := hasValidatedParent(args, i, allowedSet)
-		if !ok {
-			return false
-		}
-		positionalCounts[parent]++
-		if positionalCounts[parent] > maxPositionalArgs(subCmd, parent) {
-			return false
-		}
 	}
 
-	return true
+	subCmd := args[0]
+	rest := args[1:]
+	if _, ok := AllowedCommands[subCmd]; !ok {
+		return false
+	}
+	switch subCmd {
+	case "status":
+		return validateFlags(rest, map[string]struct{}{
+			"--json": {},
+			"--all":  {},
+			"--deep": {},
+		})
+	case "doctor":
+		return validateFlags(rest, map[string]struct{}{
+			"--repair": {},
+			"--json":   {},
+		})
+	case "gateway":
+		return len(rest) == 0 || validateSingleVerb(rest, map[string]struct{}{
+			"start":   {},
+			"stop":    {},
+			"restart": {},
+			"status":  {},
+			"health":  {},
+		})
+	case "update":
+		return validateUpdate(rest)
+	case "config":
+		return validateConfig(rest)
+	case "channels":
+		return len(rest) == 0 || validateSingleVerb(rest, map[string]struct{}{
+			"list":   {},
+			"status": {},
+			"add":    {},
+			"remove": {},
+		})
+	case "plugins":
+		return validatePlugins(rest)
+	case "logs":
+		return len(rest) == 0
+	case "models":
+		return len(rest) == 0 || validateSingleVerb(rest, map[string]struct{}{
+			"list": {},
+		})
+	case "health":
+		return len(rest) == 0
+	default:
+		return false
+	}
 }
 
 // ValidateDispatchCommand validates all commands that can be pushed from server to agent.
@@ -87,6 +106,95 @@ func OfficialInstallScript() string {
 	return officialInstallScript
 }
 
+func validateFlags(args []string, allowed map[string]struct{}) bool {
+	seen := make(map[string]struct{}, len(args))
+	for _, arg := range args {
+		if _, ok := allowed[arg]; !ok {
+			return false
+		}
+		if _, duplicated := seen[arg]; duplicated {
+			return false
+		}
+		seen[arg] = struct{}{}
+	}
+	return true
+}
+
+func validateSingleVerb(args []string, allowed map[string]struct{}) bool {
+	if len(args) != 1 {
+		return false
+	}
+	_, ok := allowed[args[0]]
+	return ok
+}
+
+func validateUpdate(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	if args[0] == "status" {
+		return validateFlags(args[1:], map[string]struct{}{
+			"--json":    {},
+			"--channel": {},
+		})
+	}
+	return validateFlags(args, map[string]struct{}{
+		"--json":    {},
+		"--channel": {},
+	})
+}
+
+func validateConfig(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	if len(args) == 1 {
+		return args[0] == "get" || args[0] == "set"
+	}
+
+	switch args[0] {
+	case "get":
+		return len(args) == 1
+	case "set":
+		if len(args) != 3 {
+			return false
+		}
+		key := strings.TrimSpace(args[1])
+		if key == "" || strings.HasPrefix(key, "-") || strings.ContainsAny(key, " \t\r\n") {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func validatePlugins(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	if len(args) == 1 {
+		switch args[0] {
+		case "list", "enable", "disable", "uninstall", "install":
+			return true
+		default:
+			return false
+		}
+	}
+	if len(args) != 2 {
+		return false
+	}
+	switch args[0] {
+	case "install", "enable", "disable", "uninstall":
+		name := strings.TrimSpace(args[1])
+		return name != "" && !strings.HasPrefix(name, "-")
+	default:
+		return false
+	}
+}
+
+// hasValidatedParent and maxPositionalArgs are retained for test compatibility with
+// earlier whitelist implementations.
 func hasValidatedParent(args []string, idx int, allowedSet map[string]struct{}) (string, bool) {
 	if idx <= 1 {
 		return "", false

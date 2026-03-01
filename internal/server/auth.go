@@ -15,6 +15,7 @@ import (
 )
 
 const jwtTTL = 24 * time.Hour
+const MinAuthSecretLength = 16
 
 type authUserContextKey struct{}
 
@@ -50,21 +51,36 @@ func NewTokenAuth(deviceToken string, jwtSecret []byte, users *UserStore) *Token
 
 func NewTokenAuthFromEnv(users ...*UserStore) (*TokenAuth, error) {
 	deviceToken := strings.TrimSpace(os.Getenv("CLAWMINI_DEVICE_TOKEN"))
-	if deviceToken == "" {
-		return nil, fmt.Errorf("CLAWMINI_DEVICE_TOKEN is required")
-	}
-	secret := strings.TrimSpace(os.Getenv("CLAWMINI_JWT_SECRET"))
-	if secret == "" {
-		secret = strings.TrimSpace(os.Getenv("CLAWMINI_ADMIN_TOKEN"))
-	}
-	if secret == "" {
-		return nil, fmt.Errorf("CLAWMINI_JWT_SECRET is required")
+	jwtSecret := strings.TrimSpace(os.Getenv("CLAWMINI_JWT_SECRET"))
+	if err := ValidateAuthConfig(deviceToken, []byte(jwtSecret)); err != nil {
+		return nil, err
 	}
 	var userStore *UserStore
 	if len(users) > 0 {
 		userStore = users[0]
 	}
-	return NewTokenAuth(deviceToken, []byte(secret), userStore), nil
+	return NewTokenAuth(deviceToken, []byte(jwtSecret), userStore), nil
+}
+
+func validateAuthSecret(name, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if len(trimmed) < MinAuthSecretLength {
+		return fmt.Errorf("%s must be at least %d characters", name, MinAuthSecretLength)
+	}
+	return nil
+}
+
+func ValidateAuthConfig(deviceToken string, jwtSecret []byte) error {
+	if err := validateAuthSecret("CLAWMINI_DEVICE_TOKEN", deviceToken); err != nil {
+		return err
+	}
+	if err := validateAuthSecret("CLAWMINI_JWT_SECRET", string(jwtSecret)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *TokenAuth) ValidateDeviceToken(token string) bool {
@@ -171,9 +187,6 @@ func ExtractToken(r *http.Request) string {
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 			return strings.TrimSpace(parts[1])
 		}
-	}
-	if token := strings.TrimSpace(r.Header.Get("X-Admin-Token")); token != "" {
-		return token
 	}
 	return ""
 }

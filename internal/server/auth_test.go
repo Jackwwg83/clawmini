@@ -45,13 +45,13 @@ func TestNewTokenAuthFromEnv_DefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("expected missing env tokens to fail")
 	}
 
-	t.Setenv("CLAWMINI_JWT_SECRET", "jwt-override")
-	t.Setenv("CLAWMINI_DEVICE_TOKEN", "device-override")
+	t.Setenv("CLAWMINI_JWT_SECRET", "jwt-override-1234")
+	t.Setenv("CLAWMINI_DEVICE_TOKEN", "device-override-1234")
 	a, err := NewTokenAuthFromEnv()
 	if err != nil {
 		t.Fatalf("unexpected env parse error: %v", err)
 	}
-	if string(a.JWTSecret) != "jwt-override" || a.DeviceToken != "device-override" {
+	if string(a.JWTSecret) != "jwt-override-1234" || a.DeviceToken != "device-override-1234" {
 		t.Fatalf("override tokens not applied: %+v", a)
 	}
 }
@@ -66,8 +66,8 @@ func TestExtractToken_Precedence(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodGet, "/api/devices?token=query-token", nil)
 	req.Header.Set("X-Admin-Token", "header-token")
-	if got := ExtractToken(req); got != "header-token" {
-		t.Fatalf("expected X-Admin-Token, got %q", got)
+	if got := ExtractToken(req); got != "" {
+		t.Fatalf("expected X-Admin-Token to be ignored, got %q", got)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/devices?token=query-token", nil)

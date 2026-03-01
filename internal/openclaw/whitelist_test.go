@@ -92,3 +92,21 @@ func TestValidateCommand_RejectsShellInjection(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateCommand_StrictSubcommandShapes(t *testing.T) {
+	tests := []struct {
+		args []string
+	}{
+		{args: []string{"gateway", "start", "extra"}},
+		{args: []string{"channels", "status", "extra"}},
+		{args: []string{"update", "status", "status"}},
+		{args: []string{"config", "set", "plugins.entries.foo.secret", "value", "extra"}},
+		{args: []string{"plugins", "install", "plugin-a", "plugin-b"}},
+	}
+
+	for _, tc := range tests {
+		if ValidateCommand("openclaw", tc.args) {
+			t.Fatalf("expected args=%v to be rejected", tc.args)
+		}
+	}
+}

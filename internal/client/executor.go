@@ -16,6 +16,7 @@ import (
 type Executor struct{}
 
 const maxCapturedOutputBytes int64 = 1 << 20
+const truncatedOutputMarker = "\n[output truncated]\n"
 
 func NewExecutor() *Executor {
 	return &Executor{}
@@ -113,15 +114,32 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {
 	defer r.Close()
 
+	if maxBytes <= 0 {
+		maxBytes = 1
+	}
+
+	markerBytes := []byte(truncatedOutputMarker)
+	captureLimit := maxBytes - int64(len(markerBytes))
+	if captureLimit < 0 {
+		captureLimit = 0
+	}
+
 	var buf bytes.Buffer
-	limited := &io.LimitedReader{R: r, N: maxBytes}
+	limited := &io.LimitedReader{R: r, N: captureLimit + 1}
 	if _, err := io.Copy(&buf, limited); err != nil {
 		return "", err
 	}
-	if limited.N == 0 {
+	if int64(buf.Len()) > captureLimit {
+		capped := buf.Bytes()
+		if captureLimit > 0 {
+			capped = capped[:captureLimit]
+		} else {
+			capped = capped[:0]
+		}
 		if _, err := io.Copy(io.Discard, r); err != nil {
 			return "", err
 		}
+		return string(capped) + truncatedOutputMarker, nil
 	}
 	return buf.String(), nil
 }

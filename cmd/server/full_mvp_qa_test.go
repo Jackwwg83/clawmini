@@ -658,9 +658,7 @@ func TestDataIntegrity_ForeignKeyCascade_DeleteDevice(t *testing.T) {
 	user, _ := app.users.CreateUser("fkuser", "fkpass", "user", "FK User")
 	app.users.BindDevice(user.ID, "fk-dev")
 
-	// Delete commands first (as the API does)
-	app.commands.DeleteByDevice("fk-dev")
-	// Delete device
+	// Delete device and rely on FK cascade to remove related rows.
 	err := app.devices.DeleteDevice("fk-dev")
 	if err != nil {
 		t.Fatalf("delete device: %v", err)

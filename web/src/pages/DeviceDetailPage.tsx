@@ -925,8 +925,9 @@ function OpenClawUpdateCard({
         setStatusInfo(parseUpdateStatus(parsedOutput, device.status?.openclaw.updateAvailable))
 
         if (isCommandFailed(record)) {
-          message.error(record.stderr || '检查更新失败')
-        } else if (showSuccessMessage) {
+          throw new Error(record.stderr || '检查更新失败')
+        }
+        if (showSuccessMessage) {
           message.success('更新状态已刷新')
         }
       } catch (err) {
@@ -952,10 +953,9 @@ function OpenClawUpdateCard({
       setUpdateResult(record)
 
       if (isCommandFailed(record)) {
-        message.error(record.stderr || '升级失败')
-      } else {
-        message.success('升级命令执行完成')
+        throw new Error(record.stderr || '升级失败')
       }
+      message.success('升级命令执行完成')
 
       await onRefreshDevice()
       await checkUpdateStatus(false)

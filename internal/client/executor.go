@@ -171,8 +171,25 @@ func ensureEnv(env []string) []string {
 			env = append(env, "USER="+u.Username)
 		}
 	}
+	// Ensure PATH includes common install locations
+	homeDir := ""
+	if u, err := user.Current(); err == nil {
+		homeDir = u.HomeDir
+	}
 	if !has["PATH"] {
-		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+		p := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		if homeDir != "" {
+			p = homeDir + "/.openclaw/bin:" + homeDir + "/.npm-global/bin:" + homeDir + "/.local/bin:" + p
+		}
+		env = append(env, "PATH="+p)
+	} else if homeDir != "" {
+		// PATH exists but may not include openclaw install dirs - prepend them
+		for i, e := range env {
+			if len(e) > 5 && e[:5] == "PATH=" {
+				env[i] = "PATH=" + homeDir + "/.openclaw/bin:" + homeDir + "/.npm-global/bin:" + homeDir + "/.local/bin:" + e[5:]
+				break
+			}
+		}
 	}
 	return env
 }

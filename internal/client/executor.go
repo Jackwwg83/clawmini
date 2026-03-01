@@ -199,6 +199,11 @@ func ensureEnv(env []string) []string {
 	}
 	if !has["PATH"] {
 		p := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		// Add openclaw's bundled node/npm to PATH
+		nodeGlob, _ := filepath.Glob(homeDir + "/.openclaw/tools/node-*/bin")
+		for _, np := range nodeGlob {
+			p = np + ":" + p
+		}
 		if homeDir != "" {
 			p = homeDir + "/.openclaw/bin:" + homeDir + "/.npm-global/bin:" + homeDir + "/.local/bin:" + p
 		}
@@ -207,7 +212,12 @@ func ensureEnv(env []string) []string {
 		// PATH exists but may not include openclaw install dirs - prepend them
 		for i, e := range env {
 			if len(e) > 5 && e[:5] == "PATH=" {
-				env[i] = "PATH=" + homeDir + "/.openclaw/bin:" + homeDir + "/.npm-global/bin:" + homeDir + "/.local/bin:" + e[5:]
+				prefix := homeDir + "/.openclaw/bin:" + homeDir + "/.npm-global/bin:" + homeDir + "/.local/bin:"
+				nodeGlob2, _ := filepath.Glob(homeDir + "/.openclaw/tools/node-*/bin")
+				for _, np := range nodeGlob2 {
+					prefix = np + ":" + prefix
+				}
+				env[i] = "PATH=" + prefix + e[5:]
 				break
 			}
 		}

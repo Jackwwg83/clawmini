@@ -9,6 +9,11 @@ func OfflineInstallCommand(serverBaseURL string) string {
 
 const officialInstallScript = "DYNAMIC"
 
+const (
+	dispatchLingerCheckCommand  = `loginctl show-user "$(id -un)" --property=Linger --value`
+	dispatchLingerEnableCommand = `loginctl enable-linger "$(id -un)"`
+)
+
 // AllowedCommands defines the whitelist of openclaw subcommands the client will execute
 var AllowedCommands = map[string][]string{
 	"status":   {"--json", "--all", "--deep"},
@@ -105,6 +110,9 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 			return false
 		}
 		if args[1] == "openclaw --version" || args[1] == "$HOME/.openclaw/bin/openclaw --version" {
+			return true
+		}
+		if args[1] == dispatchLingerCheckCommand || args[1] == dispatchLingerEnableCommand {
 			return true
 		}
 		// Allow offline install command from any ClawMini server

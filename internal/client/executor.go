@@ -155,7 +155,7 @@ func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {
 	return buf.String(), nil
 }
 
-// ensureEnv makes sure HOME, USER, and PATH are set in the environment.
+// ensureEnv makes sure HOME, USER, PATH, and user-systemd env vars are set.
 // systemd services often run with minimal env, causing scripts to fail.
 func ensureEnv(env []string) []string {
 	has := make(map[string]bool)
@@ -176,6 +176,16 @@ func ensureEnv(env []string) []string {
 	if !has["USER"] {
 		if u, err := user.Current(); err == nil {
 			env = append(env, "USER="+u.Username)
+		}
+	}
+	if !has["XDG_RUNTIME_DIR"] {
+		if u, err := user.Current(); err == nil {
+			env = append(env, fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%s", u.Uid))
+		}
+	}
+	if !has["DBUS_SESSION_BUS_ADDRESS"] {
+		if u, err := user.Current(); err == nil {
+			env = append(env, fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%s/bus", u.Uid))
 		}
 	}
 	// Ensure PATH includes common install locations

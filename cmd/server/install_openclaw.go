@@ -11,6 +11,11 @@ import (
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
+const (
+	lingerCheckCommand  = `loginctl show-user "$(id -un)" --property=Linger --value`
+	lingerEnableCommand = `loginctl enable-linger "$(id -un)"`
+)
+
 func (a *serverApp) installOpenClawSteps() []server.IMConfigStep {
 	return []server.IMConfigStep{
 		{
@@ -29,6 +34,12 @@ func (a *serverApp) installOpenClawSteps() []server.IMConfigStep {
 			Key:            "verify-version",
 			Title:          "验证安装结果",
 			DisplayCommand: "bash -lc \"openclaw --version\"",
+			Status:         "pending",
+		},
+		{
+			Key:            "enable-linger",
+			Title:          "启用 systemd linger",
+			DisplayCommand: `bash -lc "loginctl enable-linger \"$(id -un)\""`,
 			Status:         "pending",
 		},
 	}
@@ -98,7 +109,7 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 		job.Error = ""
 	})
 
-	checkRec, err := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-c", "openclaw --version 2>/dev/null || $HOME/.openclaw/bin/openclaw --version 2>/dev/null"}, 20)
+	checkRec, err := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", "openclaw --version"}, 20)
 	if err != nil {
 		a.failInstallStep(jobID, "check-existing", "检查 OpenClaw 失败", &checkRec, err)
 		a.logAudit("openclaw.install", deviceID, err.Error(), adminIP, "failed")
@@ -106,6 +117,18 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 	}
 
 	alreadyInstalled := !isCommandFailed(checkRec)
+	if !alreadyInstalled {
+		fallbackCheckRec, fallbackErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", "$HOME/.openclaw/bin/openclaw --version"}, 20)
+		if fallbackErr != nil {
+			a.failInstallStep(jobID, "check-existing", "检查 OpenClaw 失败", &fallbackCheckRec, fallbackErr)
+			a.logAudit("openclaw.install", deviceID, fallbackErr.Error(), adminIP, "failed")
+			return
+		}
+		if !isCommandFailed(fallbackCheckRec) {
+			checkRec = fallbackCheckRec
+			alreadyInstalled = true
+		}
+	}
 	_ = a.completeInstallStep(jobID, "check-existing", &checkRec, "")
 
 	if alreadyInstalled {
@@ -153,6 +176,41 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 	}
 	version := parseVersionFromCommandOutput(verifyRec)
 	_ = a.completeInstallStep(jobID, "verify-version", &verifyRec, "")
+
+	lingerCheckRec, lingerCheckErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerCheckCommand}, 20)
+	if lingerCheckErr != nil {
+		a.failInstallStep(jobID, "enable-linger", "检查 linger 状态失败", &lingerCheckRec, lingerCheckErr)
+		a.logAudit("openclaw.install", deviceID, lingerCheckErr.Error(), adminIP, "failed")
+		return
+	}
+	if isCommandFailed(lingerCheckRec) {
+		errText := commandErrorText(lingerCheckRec, "检查 linger 状态失败")
+		a.failInstallStep(jobID, "enable-linger", errText, &lingerCheckRec, errors.New(errText))
+		a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
+		return
+	}
+
+	lingerState := strings.ToLower(strings.TrimSpace(lingerCheckRec.Stdout))
+	if lingerState == "" {
+		lingerState = strings.ToLower(strings.TrimSpace(lingerCheckRec.Stderr))
+	}
+	if lingerState == "yes" {
+		_ = a.completeInstallStep(jobID, "enable-linger", &lingerCheckRec, "")
+	} else {
+		lingerEnableRec, lingerEnableErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", lingerEnableCommand}, 20)
+		if lingerEnableErr != nil {
+			a.failInstallStep(jobID, "enable-linger", "启用 linger 失败", &lingerEnableRec, lingerEnableErr)
+			a.logAudit("openclaw.install", deviceID, lingerEnableErr.Error(), adminIP, "failed")
+			return
+		}
+		if isCommandFailed(lingerEnableRec) {
+			errText := commandErrorText(lingerEnableRec, "启用 linger 失败")
+			a.failInstallStep(jobID, "enable-linger", errText, &lingerEnableRec, errors.New(errText))
+			a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
+			return
+		}
+		_ = a.completeInstallStep(jobID, "enable-linger", &lingerEnableRec, "")
+	}
 
 	if err := a.devices.UpdateOpenClawState(deviceID, true, version); err != nil {
 		a.failInstallJob(jobID, "更新设备 OpenClaw 状态失败: "+err.Error())

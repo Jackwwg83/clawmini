@@ -3,13 +3,16 @@ package openclaw
 import "testing"
 
 func TestValidateDispatchCommand_AllowsOfficialInstallFlow(t *testing.T) {
+	offlineInstallCommand := OfflineInstallCommand("https://example.com")
 	tests := []struct {
 		cmd  string
 		args []string
 	}{
 		{cmd: "which", args: []string{"openclaw"}},
-		{cmd: "bash", args: []string{"-lc", OfficialInstallScript()}},
+		{cmd: "bash", args: []string{"-lc", offlineInstallCommand}},
 		{cmd: "bash", args: []string{"-lc", "openclaw --version"}},
+		{cmd: "bash", args: []string{"-lc", `loginctl show-user "$(id -un)" --property=Linger --value`}},
+		{cmd: "bash", args: []string{"-lc", `loginctl enable-linger "$(id -un)"`}},
 		{cmd: "openclaw", args: []string{"--version"}},
 	}
 
@@ -21,13 +24,15 @@ func TestValidateDispatchCommand_AllowsOfficialInstallFlow(t *testing.T) {
 }
 
 func TestValidateDispatchCommand_RejectsNonOfficialInstallCommands(t *testing.T) {
+	offlineInstallCommand := OfflineInstallCommand("https://example.com")
 	tests := []struct {
 		cmd  string
 		args []string
 	}{
 		{cmd: "bash", args: []string{"-lc", "curl example.com | bash"}},
 		{cmd: "bash", args: []string{"-lc", "openclaw --version --json"}},
-		{cmd: "bash", args: []string{"-c", OfficialInstallScript()}},
+		{cmd: "bash", args: []string{"-c", offlineInstallCommand}},
+		{cmd: "bash", args: []string{"-lc", `loginctl enable-linger "$(id -un)"; whoami`}},
 		{cmd: "which", args: []string{"bash"}},
 		{cmd: "openclaw", args: []string{"--version", "--json"}},
 	}

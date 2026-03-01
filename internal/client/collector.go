@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"os/user"
@@ -167,30 +168,19 @@ func collectOpenClaw(ctx context.Context) protocol.OpenClawInfo {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Try openclaw in PATH first, then fallback to ~/.openclaw/bin/
-	cmd := exec.CommandContext(probeCtx, "openclaw", "status", "--json")
-	cmd.Env = ensureEnv(os.Environ())
-	out, err := cmd.Output()
-	if err != nil {
-		// Fallback: try ~/.openclaw/bin/openclaw directly
-		if u, uerr := user.Current(); uerr == nil {
-			ocBin := filepath.Join(u.HomeDir, ".openclaw", "bin", "openclaw")
-			cmd2 := exec.CommandContext(probeCtx, ocBin, "status", "--json")
-			cmd2.Env = ensureEnv(os.Environ())
-			out2, err2 := cmd2.Output()
-			if err2 == nil {
-				out = out2
-				err = nil
-			}
-		}
-	}
-	if err != nil {
+	installed, version := detectOpenClawInstalled(probeCtx)
+	if !installed {
 		return protocol.OpenClawInfo{Installed: false, GatewayStatus: "unknown"}
+	}
+
+	out, err := runOpenClawWithFallback(probeCtx, "status", "--json")
+	if err != nil {
+		return protocol.OpenClawInfo{Installed: true, Version: version, GatewayStatus: "unknown"}
 	}
 
 	var raw map[string]interface{}
 	if err := json.Unmarshal(out, &raw); err != nil {
-		return protocol.OpenClawInfo{Installed: true, GatewayStatus: "unknown"}
+		return protocol.OpenClawInfo{Installed: true, Version: version, GatewayStatus: "unknown"}
 	}
 
 	info := protocol.OpenClawInfo{
@@ -201,6 +191,9 @@ func collectOpenClaw(ctx context.Context) protocol.OpenClawInfo {
 	}
 	if info.Version == "" {
 		info.Version = asString(raw["openclawVersion"])
+	}
+	if info.Version == "" {
+		info.Version = version
 	}
 	if info.GatewayStatus == "" {
 		if g, ok := raw["gateway"].(map[string]interface{}); ok {
@@ -235,6 +228,51 @@ func collectOpenClaw(ctx context.Context) protocol.OpenClawInfo {
 	}
 
 	return info
+}
+
+func detectOpenClawInstalled(ctx context.Context) (bool, string) {
+	out, err := runOpenClawWithFallback(ctx, "--version")
+	if err != nil {
+		return false, ""
+	}
+	return true, parseOpenClawVersionText(string(out))
+}
+
+func runOpenClawWithFallback(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "openclaw", args...)
+	cmd.Env = ensureEnv(os.Environ())
+	out, err := cmd.Output()
+	if err == nil {
+		return out, nil
+	}
+
+	ocBin, pathErr := openClawBinaryPath()
+	if pathErr != nil {
+		return nil, err
+	}
+	if errors.Is(err, exec.ErrNotFound) || shouldTryDirectOpenClaw(err) {
+		cmd2 := exec.CommandContext(ctx, ocBin, args...)
+		cmd2.Env = ensureEnv(os.Environ())
+		out2, err2 := cmd2.Output()
+		if err2 == nil {
+			return out2, nil
+		}
+		// Preserve original error for clearer behavior when both fail.
+	}
+	return nil, err
+}
+
+func openClawBinaryPath() (string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(u.HomeDir, ".openclaw", "bin", "openclaw"), nil
+}
+
+func shouldTryDirectOpenClaw(err error) bool {
+	var ee *exec.Error
+	return errors.As(err, &ee)
 }
 
 func asString(v interface{}) string {

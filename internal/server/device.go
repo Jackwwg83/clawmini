@@ -154,7 +154,7 @@ func (s *DeviceStore) UpdateHeartbeat(hb protocol.HeartbeatPayload) error {
 
 	if _, err := tx.Exec(`
 UPDATE devices
-SET updated_at=?, last_seen_at=?, has_openclaw=?, openclaw_version=CASE WHEN ? = '' THEN openclaw_version ELSE ? END
+SET updated_at=?, last_seen_at=?, has_openclaw=CASE WHEN has_openclaw = 1 THEN 1 ELSE ? END, openclaw_version=CASE WHEN ? = '' THEN openclaw_version ELSE ? END
 WHERE id=?;
 `, now, now, installed, hb.OpenClaw.Version, hb.OpenClaw.Version, hb.DeviceID); err != nil {
 		return err

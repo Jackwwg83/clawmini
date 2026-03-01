@@ -85,3 +85,29 @@ func TestCollectOpenClaw_NotInstalledFallback(t *testing.T) {
 		t.Fatalf("expected unknown gateway fallback, got %q", info.GatewayStatus)
 	}
 }
+
+func TestCollectOpenClaw_StatusFailureStillInstalled(t *testing.T) {
+	mockDir := writeMockOpenClaw(t, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "openclaw v9.9.9"
+  exit 0
+fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+  echo "gateway not configured" >&2
+  exit 1
+fi
+exit 1
+`)
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	info := collectOpenClaw(context.Background())
+	if !info.Installed {
+		t.Fatalf("expected installed=true when --version succeeds")
+	}
+	if info.Version != "openclaw v9.9.9" {
+		t.Fatalf("expected version from --version probe, got %q", info.Version)
+	}
+	if info.GatewayStatus != "unknown" {
+		t.Fatalf("expected unknown gateway status when status fails, got %q", info.GatewayStatus)
+	}
+}

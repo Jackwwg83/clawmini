@@ -139,3 +139,48 @@ func TestDeviceStoreNotFoundAndHeartbeatValidation(t *testing.T) {
 		t.Fatalf("expected heartbeat update error for missing device")
 	}
 }
+
+func TestDeviceStoreHeartbeatDoesNotDowngradeInstalledFlag(t *testing.T) {
+	db := openTestDB(t)
+	store := NewDeviceStore(db)
+	if err := store.EnsureSchema(); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	if err := store.UpsertDevice(protocol.RegisterPayload{
+		DeviceID:        "dev-openclaw",
+		Hostname:        "host-a",
+		OS:              "linux",
+		Arch:            "amd64",
+		HasOpenClaw:     true,
+		OpenClawVersion: "1.0.0",
+		ClientVersion:   "0.1.0",
+	}); err != nil {
+		t.Fatalf("upsert device: %v", err)
+	}
+
+	if err := store.UpdateHeartbeat(protocol.HeartbeatPayload{
+		DeviceID: "dev-openclaw",
+		System:   protocol.SystemInfo{CPUUsage: 1},
+		OpenClaw: protocol.OpenClawInfo{
+			Installed:     false,
+			GatewayStatus: "unknown",
+		},
+	}); err != nil {
+		t.Fatalf("update heartbeat: %v", err)
+	}
+
+	snap, err := store.GetDevice("dev-openclaw")
+	if err != nil {
+		t.Fatalf("get device: %v", err)
+	}
+	if !snap.HasOpenClaw {
+		t.Fatalf("expected hasOpenClaw to remain true after heartbeat downgrade attempt")
+	}
+	if snap.Status == nil {
+		t.Fatalf("expected status row")
+	}
+	if snap.Status.OpenClawInfo.Installed {
+		t.Fatalf("expected status.openclaw.installed to reflect latest heartbeat=false")
+	}
+}

@@ -49,12 +49,9 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 		command = resolved
 	}
 
-	execUser := resolveOpenClawUser()
-	execCmd, wrappedWithSudo := buildExecCommand(ctx, command, cmd.Command, cmd.Args, os.Geteuid(), execUser)
-	if !wrappedWithSudo {
-		// Ensure essential env vars are set (systemd services may lack them)
-		execCmd.Env = ensureEnv(os.Environ())
-	}
+	execCmd := exec.CommandContext(ctx, command, cmd.Args...)
+	// Ensure essential env vars are set (systemd services may lack them)
+	execCmd.Env = ensureEnv(os.Environ())
 	stdoutPipe, err := execCmd.StdoutPipe()
 	if err != nil {
 		result.ExitCode = 1
@@ -125,38 +122,6 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 	return result
 }
 
-func buildExecCommand(ctx context.Context, resolvedCommand, originalCommand string, args []string, euid int, execUser *user.User) (*exec.Cmd, bool) {
-	if shouldWrapGatewayCommandWithSudo(euid, originalCommand, args, execUser) {
-		sudoArgs := make([]string, 0, 4+len(args))
-		sudoArgs = append(sudoArgs, "-u", execUser.Username, "-i", originalCommand)
-		sudoArgs = append(sudoArgs, args...)
-		return exec.CommandContext(ctx, "sudo", sudoArgs...), true
-	}
-	return exec.CommandContext(ctx, resolvedCommand, args...), false
-}
-
-func shouldWrapGatewayCommandWithSudo(euid int, command string, args []string, execUser *user.User) bool {
-	if euid != 0 {
-		return false
-	}
-	if command != "openclaw" {
-		return false
-	}
-	if execUser == nil || execUser.Uid == "0" || strings.TrimSpace(execUser.Username) == "" {
-		return false
-	}
-	if len(args) < 2 || args[0] != "gateway" {
-		return false
-	}
-
-	switch args[1] {
-	case "start", "restart", "install", "stop", "status":
-		return true
-	default:
-		return false
-	}
-}
-
 func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {
 	defer r.Close()
 
@@ -193,57 +158,14 @@ func readCappedOutput(r io.ReadCloser, maxBytes int64) (string, error) {
 // ensureEnv makes sure HOME, USER, PATH, and user-systemd env vars are set.
 // systemd services often run with minimal env, causing scripts to fail.
 
-// resolveOpenClawUser returns the actual user owning the openclaw installation.
-// When running as root (systemd service), user.Current() returns root which is wrong.
-// Priority: SUDO_USER env > owner of /home/*/.openclaw > user.Current()
+// resolveOpenClawUser returns the runtime user.
+// For root services this is intentionally root.
 func resolveOpenClawUser() *user.User {
 	u, err := user.Current()
 	if err != nil {
 		return nil
 	}
-	if u.Uid != "0" {
-		return u
-	}
-	// Running as root - find the real user
-	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
-		if lu, err := user.Lookup(sudoUser); err == nil {
-			return lu
-		}
-	}
-	// Check /home/*/.openclaw
-	matches, _ := filepath.Glob("/home/*/.openclaw")
-	for _, m := range matches {
-		dir := filepath.Dir(m) // /home/username
-		base := filepath.Base(dir)
-		if lu, err := user.Lookup(base); err == nil {
-			return lu
-		}
-	}
-	// Check /root/.openclaw — if it exists, find the first real (non-root) user
-	// with a home directory, since openclaw was likely installed via sudo
-	if _, err := os.Stat("/root/.openclaw"); err == nil {
-		// Find first human user (uid >= 1000) with a home in /home/
-		homeDirs, _ := filepath.Glob("/home/*")
-		for _, d := range homeDirs {
-			base := filepath.Base(d)
-			if lu, err := user.Lookup(base); err == nil && lu.Uid != "0" {
-				return lu
-			}
-		}
-	}
-	// Last resort: find any user with an active systemd session (/run/user/<uid>)
-	runUsers, _ := filepath.Glob("/run/user/*")
-	for _, d := range runUsers {
-		uid := filepath.Base(d)
-		if uid == "0" {
-			continue
-		}
-		// Lookup user by uid
-		if lu, err := user.LookupId(uid); err == nil {
-			return lu
-		}
-	}
-	return u // fallback to root
+	return u
 }
 
 func ensureEnv(env []string) []string {

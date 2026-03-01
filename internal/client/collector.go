@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"os/user"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,8 +46,8 @@ func (c *Collector) Collect(ctx context.Context, deviceID string) protocol.Heart
 }
 
 func resolvedOpenClawUsername() string {
-	u := resolveOpenClawUser()
-	if u == nil {
+	u, err := user.Current()
+	if err != nil || u == nil {
 		return ""
 	}
 	return strings.TrimSpace(u.Username)

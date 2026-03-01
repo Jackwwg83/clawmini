@@ -3,21 +3,14 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 
 	"github.com/raystone-ai/clawmini/internal/server"
 )
 
-// resolveUserScript finds the actual user who owns the openclaw installation.
-// When the client runs as root (systemd service), id -un returns "root" which is wrong.
-// Priority: SUDO_USER > owner of /home/*/.openclaw > fallback id -un
 const (
-	resolveUserScript = `u=""; [ -n "$SUDO_USER" ] && u="$SUDO_USER"; if [ -z "$u" ]; then for d in /home/*/.openclaw; do [ -d "$d" ] && u="$(stat -c '%U' "$d")" && break; done; fi; [ -z "$u" ] && u="$(id -un)"; echo "$u"`
-
-	lingerCheckCommand  = `u=$(` + resolveUserScript + `); loginctl show-user "$u" --property=Linger --value`
-	lingerEnableCommand = `u=$(` + resolveUserScript + `); loginctl enable-linger "$u"`
+	defaultLingerUsername = "root"
 )
 
 var lingerUsernamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
@@ -31,17 +24,15 @@ func formatLingerEnableCommand(username string) string {
 }
 
 func resolveLingerCommands(deviceID, username string) (string, string) {
+	_ = deviceID
 	username = strings.TrimSpace(username)
-	if username != "" && lingerUsernamePattern.MatchString(username) {
-		return formatLingerCheckCommand(username), formatLingerEnableCommand(username)
-	}
-
 	if username == "" {
-		log.Printf("WARNING: device %s heartbeat username is empty, falling back to runtime user detection for linger commands", strings.TrimSpace(deviceID))
-	} else {
-		log.Printf("WARNING: device %s heartbeat username %q is invalid, falling back to runtime user detection for linger commands", strings.TrimSpace(deviceID), username)
+		username = defaultLingerUsername
 	}
-	return lingerCheckCommand, lingerEnableCommand
+	if !lingerUsernamePattern.MatchString(username) {
+		username = defaultLingerUsername
+	}
+	return formatLingerCheckCommand(username), formatLingerEnableCommand(username)
 }
 
 // ensureLingerEnabled verifies user linger state and enables it when required.

@@ -32,15 +32,9 @@ func (a *serverApp) installOpenClawSteps() []server.IMConfigStep {
 			Status:         "pending",
 		},
 		{
-			Key:            "publish-binary",
-			Title:          "发布 OpenClaw 到系统路径",
-			DisplayCommand: `bash -lc "cp .openclaw/bin/openclaw /usr/local/bin/openclaw"`,
-			Status:         "pending",
-		},
-		{
 			Key:            "enable-linger",
 			Title:          "启用 systemd linger",
-			DisplayCommand: `bash -lc "loginctl enable-linger \"$(id -un)\""`,
+			DisplayCommand: `bash -lc "loginctl enable-linger \"root\""`,
 			Status:         "pending",
 		},
 	}
@@ -177,20 +171,6 @@ func (a *serverApp) runInstallOpenClawJob(jobID, deviceID, adminIP string) {
 	}
 	version := parseVersionFromCommandOutput(verifyRec)
 	_ = a.completeInstallStep(jobID, "verify-version", &verifyRec, "")
-
-	publishRec, publishErr := a.dispatchAndWaitCommand(deviceID, "bash", []string{"-lc", openclaw.PublishBinaryCommand()}, 20)
-	if publishErr != nil {
-		a.failInstallStep(jobID, "publish-binary", "发布 OpenClaw 到系统路径失败", &publishRec, publishErr)
-		a.logAudit("openclaw.install", deviceID, publishErr.Error(), adminIP, "failed")
-		return
-	}
-	if isCommandFailed(publishRec) {
-		errText := commandErrorText(publishRec, "发布 OpenClaw 到系统路径失败")
-		a.failInstallStep(jobID, "publish-binary", errText, &publishRec, errors.New(errText))
-		a.logAudit("openclaw.install", deviceID, errText, adminIP, "failed")
-		return
-	}
-	_ = a.completeInstallStep(jobID, "publish-binary", &publishRec, "")
 
 	username := a.lookupDeviceUsername(deviceID)
 	lingerRec, lingerErr := a.ensureLingerEnabled(jobID, deviceID, "enable-linger", adminIP, username)

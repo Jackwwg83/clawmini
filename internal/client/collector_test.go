@@ -50,13 +50,13 @@ func TestCollectorCollect_SystemInfo(t *testing.T) {
 	}
 }
 
-func TestCollectorCollect_UsesResolvedOpenClawUser(t *testing.T) {
+func TestCollectorCollect_UsesCurrentUser(t *testing.T) {
 	current, err := user.Current()
 	if err != nil {
 		t.Fatalf("current user: %v", err)
 	}
 
-	t.Setenv("SUDO_USER", current.Username)
+	t.Setenv("SUDO_USER", "nobody")
 
 	hb := NewCollector().Collect(context.Background(), "dev-user")
 	if hb.System.Username != current.Username {

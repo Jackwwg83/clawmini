@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/raystone-ai/clawmini/internal/openclaw"
@@ -42,7 +44,12 @@ func (e *Executor) Execute(parent context.Context, cmd protocol.CommandPayload) 
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	execCmd := exec.CommandContext(ctx, cmd.Command, cmd.Args...)
+	command := cmd.Command
+	if resolved, err := resolveCommand(command); err == nil {
+		command = resolved
+	}
+
+	execCmd := exec.CommandContext(ctx, command, cmd.Args...)
 	// Ensure essential env vars are set (systemd services may lack them)
 	execCmd.Env = ensureEnv(os.Environ())
 	stdoutPipe, err := execCmd.StdoutPipe()
@@ -192,4 +199,76 @@ func ensureEnv(env []string) []string {
 		}
 	}
 	return env
+}
+
+func resolveCommand(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("command name is empty")
+	}
+
+	if strings.ContainsRune(name, os.PathSeparator) {
+		if isExecutableFile(name) {
+			return name, nil
+		}
+		return "", fmt.Errorf("command not found: %s", name)
+	}
+
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+
+	env := ensureEnv(os.Environ())
+	if resolved, err := lookPathInPath(name, envValue(env, "PATH")); err == nil {
+		return resolved, nil
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("command not found: %s", name)
+	}
+	candidates := []string{
+		filepath.Join(u.HomeDir, ".openclaw", "bin", name),
+		filepath.Join(u.HomeDir, ".npm-global", "bin", name),
+		filepath.Join(u.HomeDir, ".local", "bin", name),
+	}
+	for _, candidate := range candidates {
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("command not found: %s", name)
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return entry[len(prefix):]
+		}
+	}
+	return ""
+}
+
+func lookPathInPath(name, pathValue string) (string, error) {
+	if pathValue == "" {
+		return "", exec.ErrNotFound
+	}
+	for _, dir := range filepath.SplitList(pathValue) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		if isExecutableFile(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
 }

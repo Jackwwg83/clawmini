@@ -4,11 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
-	"os/user"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -239,40 +236,14 @@ func detectOpenClawInstalled(ctx context.Context) (bool, string) {
 }
 
 func runOpenClawWithFallback(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "openclaw", args...)
+	command := "openclaw"
+	if resolved, err := resolveCommand(command); err == nil {
+		command = resolved
+	}
+
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = ensureEnv(os.Environ())
-	out, err := cmd.Output()
-	if err == nil {
-		return out, nil
-	}
-
-	ocBin, pathErr := openClawBinaryPath()
-	if pathErr != nil {
-		return nil, err
-	}
-	if errors.Is(err, exec.ErrNotFound) || shouldTryDirectOpenClaw(err) {
-		cmd2 := exec.CommandContext(ctx, ocBin, args...)
-		cmd2.Env = ensureEnv(os.Environ())
-		out2, err2 := cmd2.Output()
-		if err2 == nil {
-			return out2, nil
-		}
-		// Preserve original error for clearer behavior when both fail.
-	}
-	return nil, err
-}
-
-func openClawBinaryPath() (string, error) {
-	u, err := user.Current()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(u.HomeDir, ".openclaw", "bin", "openclaw"), nil
-}
-
-func shouldTryDirectOpenClaw(err error) bool {
-	var ee *exec.Error
-	return errors.As(err, &ee)
+	return cmd.Output()
 }
 
 func asString(v interface{}) string {

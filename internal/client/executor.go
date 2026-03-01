@@ -184,6 +184,30 @@ func resolveOpenClawUser() *user.User {
 			return lu
 		}
 	}
+	// Check /root/.openclaw — if it exists, find the first real (non-root) user
+	// with a home directory, since openclaw was likely installed via sudo
+	if _, err := os.Stat("/root/.openclaw"); err == nil {
+		// Find first human user (uid >= 1000) with a home in /home/
+		homeDirs, _ := filepath.Glob("/home/*")
+		for _, d := range homeDirs {
+			base := filepath.Base(d)
+			if lu, err := user.Lookup(base); err == nil && lu.Uid != "0" {
+				return lu
+			}
+		}
+	}
+	// Last resort: find any user with an active systemd session (/run/user/<uid>)
+	runUsers, _ := filepath.Glob("/run/user/*")
+	for _, d := range runUsers {
+		uid := filepath.Base(d)
+		if uid == "0" {
+			continue
+		}
+		// Lookup user by uid
+		if lu, err := user.LookupId(uid); err == nil {
+			return lu
+		}
+	}
 	return u // fallback to root
 }
 

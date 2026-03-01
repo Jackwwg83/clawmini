@@ -10,8 +10,7 @@ func OfflineInstallCommand(serverBaseURL string) string {
 const officialInstallScript = "DYNAMIC"
 
 const (
-	dispatchLingerCheckCommand  = `loginctl show-user "$(id -un)" --property=Linger --value`
-	dispatchLingerEnableCommand = `loginctl enable-linger "$(id -un)"`
+
 )
 
 // AllowedCommands defines the whitelist of openclaw subcommands the client will execute
@@ -93,6 +92,25 @@ func ValidateCommand(cmd string, args []string) bool {
 	}
 }
 
+// isLingerCommand checks if a shell command is a linger check or enable operation.
+// Rejects commands containing shell injection (semicolons, pipes, etc. after loginctl).
+func isLingerCommand(cmd string) bool {
+	// Must end with the loginctl command - no trailing commands allowed
+	if strings.Contains(cmd, ";") || strings.Contains(cmd, "|") || strings.Contains(cmd, "&&") {
+		// Check if injection is AFTER the loginctl part
+		// Find last loginctl occurrence
+		idx := strings.LastIndex(cmd, "loginctl")
+		if idx >= 0 {
+			after := cmd[idx:]
+			if strings.ContainsAny(after, ";|&`") {
+				return false
+			}
+		}
+	}
+	return (strings.Contains(cmd, "loginctl show-user") && strings.Contains(cmd, "--property=Linger")) ||
+		(strings.Contains(cmd, "loginctl enable-linger") && !strings.ContainsAny(cmd[strings.Index(cmd, "loginctl enable-linger")+len("loginctl enable-linger"):], ";|&`"))
+}
+
 // ValidateDispatchCommand validates all commands that can be pushed from server to agent.
 // It includes the regular openclaw whitelist plus a tightly scoped OpenClaw bootstrap sequence.
 func ValidateDispatchCommand(cmd string, args []string) bool {
@@ -112,7 +130,7 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 		if args[1] == "openclaw --version" || args[1] == "$HOME/.openclaw/bin/openclaw --version" {
 			return true
 		}
-		if args[1] == dispatchLingerCheckCommand || args[1] == dispatchLingerEnableCommand {
+		if isLingerCommand(args[1]) {
 			return true
 		}
 		// Allow offline install command from any ClawMini server

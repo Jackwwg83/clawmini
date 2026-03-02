@@ -41,7 +41,9 @@ import { DeviceOnlineTag } from '../components/DeviceOnlineTag'
 import { useAuth } from '../contexts/AuthContext'
 import { useRealtime } from '../contexts/RealtimeContext'
 import type { ChannelInfo, CommandRecord, DeviceSnapshot } from '../types'
+import EmbeddingProviderCard from './EmbeddingProviderCard'
 import ModelProvidersCard from './ModelProvidersCard'
+import WorkspaceFilesCard from './WorkspaceFilesCard'
 import { formatDateTime, toProgress } from '../utils/format'
 
 const TERMINAL_STATUS = new Set(['completed', 'failed'])
@@ -2120,6 +2122,18 @@ export function DeviceDetailPage() {
       <Row gutter={[16, 16]}>
         <Col span={24}>
           <ModelProvidersCard token={token} deviceId={device.id} online={device.online} />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <EmbeddingProviderCard token={token} deviceId={device.id} online={device.online} />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <WorkspaceFilesCard token={token} deviceId={device.id} online={device.online} />
         </Col>
       </Row>
 

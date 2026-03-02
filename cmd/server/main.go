@@ -187,6 +187,17 @@ func main() {
 			r.Get("/devices/{id}/model-providers", app.handleGetModelProviders)
 			r.Put("/devices/{id}/model-providers", app.handleUpsertModelProvider)
 			r.Delete("/devices/{id}/model-providers/{name}", app.handleDeleteModelProvider)
+
+			// Embedding provider management
+			r.Get("/devices/{id}/embedding-provider", app.handleGetEmbeddingProvider)
+			r.Put("/devices/{id}/embedding-provider", app.handleUpsertEmbeddingProvider)
+
+			// Workspace file management
+			r.Get("/devices/{id}/workspace-files", app.handleListWorkspaceFiles)
+			r.Get("/devices/{id}/workspace-files/{filename}", app.handleReadWorkspaceFile)
+			r.Put("/devices/{id}/workspace-files/{filename}", app.handleWriteWorkspaceFile)
+			r.Delete("/devices/{id}/workspace-files/{filename}", app.handleDeleteWorkspaceFile)
+
 			r.Post("/batch/exec", app.handleBatchExec)
 			r.Get("/batch/{jobId}", app.handleGetBatchJob)
 			r.Get("/audit-log", app.handleGetAuditLog)

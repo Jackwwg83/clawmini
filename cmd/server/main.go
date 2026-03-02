@@ -494,7 +494,7 @@ func (a *serverApp) handleExec(w http.ResponseWriter, r *http.Request) {
 	if req.Timeout <= 0 {
 		req.Timeout = 60
 	}
-	if !openclaw.ValidateCommand(req.Command, req.Args) {
+	if !openclaw.ValidateDispatchCommand(req.Command, req.Args) {
 		server.WriteError(w, http.StatusBadRequest, "command not allowed")
 		detail := strings.TrimSpace(req.Command + " " + strings.Join(req.Args, " "))
 		a.logAudit("command.exec", deviceID, detail, adminIP, "rejected")

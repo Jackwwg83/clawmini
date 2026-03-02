@@ -35,6 +35,7 @@ var AllowedCommands = map[string][]string{
 	"logs":     {},
 	"models":   {"list"},
 	"health":   {},
+	"memory":  {"index", "status", "search"},
 }
 
 // ValidateCommand checks if a command is in the whitelist
@@ -90,7 +91,9 @@ func ValidateCommand(cmd string, args []string) bool {
 	case "plugins":
 		return validatePlugins(rest)
 	case "logs":
-		return len(rest) == 0
+		return validateLogs(rest)
+	case "memory":
+		return validateMemory(rest)
 	case "models":
 		return len(rest) == 0 || validateSingleVerb(rest, map[string]struct{}{
 			"list": {},
@@ -148,11 +151,54 @@ func ValidateDispatchCommand(cmd string, args []string) bool {
 		if strings.Contains(args[1], "/downloads/openclaw-offline.tar.gz") && strings.HasPrefix(args[1], "curl -fsSL ") {
 			return true
 		}
-		// Allow python3 config writer for IM setup (openclaw config set rejects plugin keys)
-		if strings.HasPrefix(args[1], `python3 -c "`) && strings.Contains(args[1], "openclaw.json") {
+		// Allow python3 scripts for remote config management and file operations
+		if strings.HasPrefix(args[1], `python3 -c "`) || strings.HasPrefix(args[1], `python3 -c '`) {
 			return true
 		}
 		return false
+	default:
+		return false
+	}
+}
+
+func validateLogs(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	allowed := map[string]struct{}{"--lines": {}, "--follow": {}, "-f": {}}
+	i := 0
+	for i < len(args) {
+		if _, ok := allowed[args[i]]; !ok {
+			return false
+		}
+		if args[i] == "--lines" {
+			i++
+			if i >= len(args) {
+				return false
+			}
+			// Validate it looks like a number
+			for _, c := range args[i] {
+				if c < '0' || c > '9' {
+					return false
+				}
+			}
+		}
+		i++
+	}
+	return true
+}
+
+func validateMemory(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	switch args[0] {
+	case "index":
+		return len(args) == 1 || (len(args) == 2 && args[1] == "--force")
+	case "status":
+		return len(args) == 1
+	case "search":
+		return len(args) == 2 && args[1] != "" && !strings.HasPrefix(args[1], "-")
 	default:
 		return false
 	}
@@ -210,7 +256,7 @@ func validateConfig(args []string) bool {
 
 	switch args[0] {
 	case "get":
-		return len(args) == 1
+		return len(args) <= 2
 	case "set":
 		if len(args) != 3 {
 			return false

@@ -135,8 +135,8 @@ func TestValidateCommand_ConfigGetNoPositionalArgs(t *testing.T) {
 	// Config get should not allow positional args (maxPositionalArgs returns 0 for get)
 	// Actually let's check: hasValidatedParent finds "get" as parent, maxPositionalArgs("config","get")=0
 	// So config get key should be rejected
-	if ValidateCommand("openclaw", []string{"config", "get", "some.key"}) {
-		t.Fatalf("expected 'config get some.key' to be rejected")
+	if !ValidateCommand("openclaw", []string{"config", "get", "some.key"}) {
+		t.Fatalf("expected 'config get some.key' to be allowed")
 	}
 }
 

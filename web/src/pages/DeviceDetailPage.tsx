@@ -554,29 +554,51 @@ function readBool(value: unknown): boolean | null {
   return null
 }
 
-function extractGatewayStatus(parsedOutput: unknown, rawOutput: string): string {
-  const parsedObj = toObject(parsedOutput)
-  if (parsedObj) {
-    const status =
-      firstString(parsedObj, ['gatewayStatus', 'status', 'state', 'health']) ??
-      firstString(toObject(parsedObj.gateway) ?? {}, ['status', 'state', 'health'])
-    if (status) {
-      return status
-    }
-  }
+interface GatewayStatusDetails {
+  status: string
+  runtime: string
+  rpcProbe: string
+  listening: string
+  pid: string
+}
+
+function extractGatewayStatusDetails(_parsedOutput: unknown, rawOutput: string): GatewayStatusDetails {
+  const details: GatewayStatusDetails = { status: '', runtime: '', rpcProbe: '', listening: '', pid: '' }
 
   const lines = rawOutput
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
+
   for (const line of lines) {
-    const matched = line.match(/(?:status|state|gateway)\s*[:=]\s*(.+)$/i)
-    if (matched?.[1]) {
-      return matched[1].trim()
+    // "Runtime: running (pid 2030993, state active, sub running, ...)"
+    const runtimeMatch = line.match(/^Runtime:\s*(.+)$/i)
+    if (runtimeMatch) {
+      details.runtime = runtimeMatch[1].trim()
+      const coreStatus = runtimeMatch[1].trim().split(/[\s(,]/)[0]
+      if (coreStatus) details.status = coreStatus
+      const pidMatch = runtimeMatch[1].match(/pid\s+(\d+)/)
+      if (pidMatch) details.pid = pidMatch[1]
+    }
+    const rpcMatch = line.match(/^RPC probe:\s*(.+)$/i)
+    if (rpcMatch) details.rpcProbe = rpcMatch[1].trim()
+    const listenMatch = line.match(/^Listening:\s*(.+)$/i)
+    if (listenMatch) details.listening = listenMatch[1].trim()
+  }
+
+  // Fallback
+  if (!details.status) {
+    for (const line of lines) {
+      const matched = line.match(/(?:status|state)\s*[:=]\s*(.+)$/i)
+      if (matched?.[1]) { details.status = matched[1].trim(); break }
     }
   }
-  return lines[0] || ''
+  if (!details.status) details.status = lines[0] || ''
+
+  return details
 }
+
+
 
 function parseUpdateStatus(parsedOutput: unknown, fallbackVersion?: string): UpdateStatusInfo {
   const fallback = (fallbackVersion || '').trim()
@@ -840,6 +862,7 @@ function GatewayControlCard({
   const [lastResult, setLastResult] = useState<CommandRecord | null>(null)
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusText, setStatusText] = useState(device.status?.openclaw.gatewayStatus || '')
+  const [gatewayDetails, setGatewayDetails] = useState<GatewayStatusDetails>({ status: '', runtime: '', rpcProbe: '', listening: '', pid: '' })
   const [statusUpdatedAt, setStatusUpdatedAt] = useState<number | null>(null)
   const statusInFlightRef = useRef(false)
 
@@ -867,7 +890,9 @@ function GatewayControlCard({
         const record = await onRunCommand(['gateway', 'status'], 20)
         const output = (record.stdout || record.stderr || '').trim()
         const parsedOutput = parseJsonOutput(output)
-        const nextStatus = extractGatewayStatus(parsedOutput, output)
+        const details = extractGatewayStatusDetails(parsedOutput, output)
+        setGatewayDetails(details)
+        const nextStatus = details.status
         if (nextStatus) {
           setStatusText(nextStatus)
         }
@@ -950,9 +975,35 @@ function GatewayControlCard({
   return (
     <Card title="网关控制">
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Space>
-          <Typography.Text>当前状态：</Typography.Text>
-          <Tag color={statusMeta.color}>{statusMeta.text || '未知'}</Tag>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          padding: '12px 16px',
+          borderRadius: 8,
+          background: statusMeta.color === 'success' ? '#f6ffed' : statusMeta.color === 'error' ? '#fff2f0' : statusMeta.color === 'processing' ? '#e6f4ff' : '#fafafa',
+          border: `1px solid ${statusMeta.color === 'success' ? '#b7eb8f' : statusMeta.color === 'error' ? '#ffccc7' : statusMeta.color === 'processing' ? '#91caff' : '#d9d9d9'}`,
+        }}>
+          <div style={{
+            width: 12,
+            height: 12,
+            borderRadius: '50%',
+            background: statusMeta.color === 'success' ? '#52c41a' : statusMeta.color === 'error' ? '#ff4d4f' : statusMeta.color === 'processing' ? '#1677ff' : '#8c8c8c',
+            flexShrink: 0,
+            boxShadow: statusMeta.color === 'success' ? '0 0 8px #52c41a80' : 'none',
+          }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>
+              {statusMeta.text || '未知'}
+            </div>
+            {gatewayDetails.listening ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                监听地址：{gatewayDetails.listening}
+                {gatewayDetails.pid ? ` · PID: ${gatewayDetails.pid}` : ''}
+                {gatewayDetails.rpcProbe ? ` · RPC: ${gatewayDetails.rpcProbe}` : ''}
+              </Typography.Text>
+            ) : null}
+          </div>
           <Button
             size="small"
             icon={<ReloadOutlined />}
@@ -960,12 +1011,12 @@ function GatewayControlCard({
             disabled={isOffline || isBusy || openClawNotInstalled}
             onClick={() => void refreshGatewayStatus(true)}
           >
-            刷新状态
+            刷新
           </Button>
-        </Space>
+        </div>
 
         {statusUpdatedAt ? (
-          <Typography.Text type="secondary">状态更新时间：{formatDateTime(statusUpdatedAt)}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>更新时间：{formatDateTime(statusUpdatedAt)}</Typography.Text>
         ) : null}
 
         <Space wrap>
